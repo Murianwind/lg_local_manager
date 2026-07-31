@@ -111,7 +111,7 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile windivert.zip
           Expand-Archive windivert.zip -DestinationPath windivert-extract
 
-      # ── 6. 배포 폴더 조립 ──
+      # ── 6. 배포 폴더 조립 (Full 패키지) ──
       - name: Assemble release folder
         shell: pwsh
         run: |
@@ -136,15 +136,26 @@ jobs:
           Copy-Item "README.md" "$dist/README.md"
           Copy-Item "dist/LGLocalManager.exe" "$dist/LGLocalManager.exe"
 
-      - name: Create ZIP archive
+      # ── 7. Full zip (처음 설치용, 전체 패키지) ──
+      - name: Create Full ZIP archive
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist/LGLocalManager/*" -DestinationPath "LGLocalManager.zip"
+          Compress-Archive -Path "dist/LGLocalManager/*" -DestinationPath "LGLocalManager-Full-${{ env.TAG_NAME }}-win-x64.zip"
 
-      # ── 7. 릴리스 업로드 ──
-      - name: Upload Asset to Release
+      # ── 8. Update zip (exe만, 기존 설치 위 덮어쓰기용) ──
+      - name: Create Update ZIP archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/update-only" | Out-Null
+          Copy-Item "dist/LGLocalManager.exe" "dist/update-only/LGLocalManager.exe"
+          Compress-Archive -Path "dist/update-only/*" -DestinationPath "LGLocalManager-Update-${{ env.TAG_NAME }}-win-x64.zip"
+
+      # ── 9. 릴리스 업로드 (두 zip 모두) ──
+      - name: Upload Assets to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG_NAME }}
-          files: LGLocalManager.zip
+          files: |
+            LGLocalManager-Full-*.zip
+            LGLocalManager-Update-*.zip
           prerelease: ${{ env.PRERELEASE }}
