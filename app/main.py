@@ -14,10 +14,11 @@ from pathlib import Path
 import pystray
 from PIL import Image, ImageDraw
 
-from . import prereq, startup
+from . import prereq, startup, updater
 from .device_store import DeviceStore, watch
 from .gui import DeviceWindow
 from .orchestrator import Orchestrator
+from .version import APP_VERSION
 
 APP_NAME = "LG Local Manager"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -75,7 +76,7 @@ def main() -> None:
     store_path = data_dir() / "devices.json"
     store = DeviceStore.load(store_path)
 
-    # config/settings.json 에서 게이트웨이 IP, rethink 호스트 등을 읽어온다.
+    # config/settings.json 에서 게이트웨이 IP, rethink 호스트, 업데이트 채널 등을 읽어온다.
     # 최초 실행 시엔 config.example.json을 참고해 사용자가 채워야 한다.
     import json
 
@@ -83,12 +84,19 @@ def main() -> None:
     settings = {
         "gateway_ip": "192.168.0.1",
         "rethink_host": "127.0.0.1",
+        "update_channel": "stable",  # "stable" | "beta"
     }
     if settings_path.exists():
         settings.update(json.loads(settings_path.read_text(encoding="utf-8")))
     else:
         logger.warning(
             "config/settings.json 이 없어 기본값을 사용합니다: %s", settings
+        )
+
+    def save_settings() -> None:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
     orchestrator = Orchestrator(
@@ -146,6 +154,85 @@ def main() -> None:
             logger.error("시작 프로그램 등록/해제 실패: %s", e)
             icon_.notify(f"시작 프로그램 설정 실패: {e}", APP_NAME)
 
+    # -- 업데이트 확인/설치 -------------------------------------------------
+    pending_update: updater.UpdateInfo | None = None
+    update_lock = threading.Lock()
+    checking_update = threading.Event()
+
+    def current_channel() -> str:
+        return settings.get("update_channel", "stable")
+
+    def check_update_now(icon_=None, notify_if_none: bool = False):
+        nonlocal pending_update
+        if checking_update.is_set():
+            return
+        checking_update.set()
+        try:
+            info = updater.check_for_update(channel=current_channel())
+            with update_lock:
+                pending_update = info
+            if icon_:
+                icon_.update_menu()
+                if info:
+                    icon_.notify(
+                        f"새 버전 {info.version} 이 있습니다. 트레이 메뉴에서 설치할 수 있습니다.",
+                        APP_NAME,
+                    )
+                elif notify_if_none:
+                    icon_.notify("이미 최신 버전입니다.", APP_NAME)
+        finally:
+            checking_update.clear()
+
+    def on_version_clicked(icon_, _item=None):
+        threading.Thread(
+            target=lambda: check_update_now(icon_, notify_if_none=True), daemon=True
+        ).start()
+
+    def version_label(_item=None) -> str:
+        if checking_update.is_set():
+            return "업데이트 확인 중..."
+        return f"현재 버전: v{APP_VERSION} (클릭하여 확인)"
+
+    def install_update(icon_, _item=None):
+        with update_lock:
+            info = pending_update
+        if info is None:
+            icon_.notify("설치할 업데이트가 없습니다. 먼저 버전을 클릭해 확인해주세요.", APP_NAME)
+            return
+        icon_.notify(f"버전 {info.version} 다운로드 및 설치를 시작합니다...", APP_NAME)
+
+        def _do_update():
+            try:
+                updater.apply_update(
+                    info,
+                    app_dir(),
+                    on_before_exit=lambda: quit_app(icon_),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.error("업데이트 적용 실패: %s", e)
+                icon_.notify(f"업데이트 적용 실패: {e}", APP_NAME)
+
+        threading.Thread(target=_do_update, daemon=True).start()
+
+    def make_channel_toggle(channel: str, label: str):
+        def _checked(_item=None) -> bool:
+            return current_channel() == channel
+
+        def _select(icon_, _item=None):
+            nonlocal pending_update
+            settings["update_channel"] = channel
+            save_settings()
+            with update_lock:
+                pending_update = None  # 채널이 바뀌면 이전 채널 기준의 대기 정보는 버림
+            icon_.update_menu()
+
+        return pystray.MenuItem(label, _select, checked=_checked, radio=True)
+
+    channel_menu = pystray.Menu(
+        make_channel_toggle("stable", "Stable (정식 릴리즈만)"),
+        make_channel_toggle("beta", "Beta (수동 빌드 포함)"),
+    )
+
     menu = pystray.Menu(
         pystray.MenuItem("기기 관리...", open_devices_window, default=True),
         pystray.MenuItem("rethink 웹 UI 열기", open_rethink_ui),
@@ -155,6 +242,14 @@ def main() -> None:
             "Windows 시작 시 자동 실행",
             toggle_autostart,
             checked=is_autostart_enabled,
+        ),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(version_label, on_version_clicked),
+        pystray.MenuItem("업데이트 채널", channel_menu),
+        pystray.MenuItem(
+            "업데이트 설치",
+            install_update,
+            visible=lambda _item: pending_update is not None,
         ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("종료", quit_app),
