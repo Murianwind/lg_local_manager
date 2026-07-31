@@ -8,7 +8,7 @@
 block_cipher = None
 
 a = Analysis(
-    ["app/main.py"],
+    ["launcher.py"],
     pathex=["."],
     binaries=[],
     datas=[],
