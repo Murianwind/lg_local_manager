@@ -168,14 +168,16 @@ def main() -> None:
             return
         checking_update.set()
         try:
-            info = updater.check_for_update(channel=current_channel())
+            info = updater.check_for_update(app_dir(), channel=current_channel())
             with update_lock:
                 pending_update = info
             if icon_:
                 icon_.update_menu()
                 if info:
+                    kind = "전체 재설치" if info.requires_full else "간단 업데이트"
                     icon_.notify(
-                        f"새 버전 {info.version} 이 있습니다. 트레이 메뉴에서 설치할 수 있습니다.",
+                        f"새 버전 {info.version} 이 있습니다 ({kind}). "
+                        "트레이 메뉴에서 설치할 수 있습니다.",
                         APP_NAME,
                     )
                 elif notify_if_none:
@@ -199,7 +201,8 @@ def main() -> None:
         if info is None:
             icon_.notify("설치할 업데이트가 없습니다. 먼저 버전을 클릭해 확인해주세요.", APP_NAME)
             return
-        icon_.notify(f"버전 {info.version} 다운로드 및 설치를 시작합니다...", APP_NAME)
+        kind = "전체 재설치" if info.requires_full else "간단 업데이트"
+        icon_.notify(f"버전 {info.version} {kind}를 시작합니다...", APP_NAME)
 
         def _do_update():
             try:
