@@ -79,21 +79,18 @@ jobs:
       - name: Build LGLocalManager.exe with PyInstaller
         run: pyinstaller build.spec
 
-      # ── 3. rethink-cloud (Node.js) 체크아웃 & 빌드 ──
-      # PR #107 (https://github.com/anszom/rethink/pull/107) 은 아직 master에
-      # 머지되지 않았다. 우리가 쓰는 핵심 기능(요청받은 SNI별 인증서 발급,
-      # bridge 활성화 시 기존 LG 등록 유지, advertise_requested_host)이 전부
-      # 이 PR에만 있으므로, master가 아니라 이 PR의 head를 직접 받는다.
-      # PR이 머지되면 ref를 다시 master로 되돌려도 된다.
-      - name: Checkout rethink source
-        uses: actions/checkout@v4
-        with:
-          repository: anszom/rethink
-          ref: refs/pull/107/head
-          path: rethink-src
+      # ── 3. 벤더링된 rethink-cloud(Node.js) 압축 해제 & 빌드 ──
+      # rethink 소스는 더 이상 GitHub에서 매번 받아오지 않는다. rethink-vendor.zip 에
+      # 이미 고정된 소스(PR #107 기준, GPL-2.0)가 우리 저장소에 커밋되어 있다.
+      # (파일 개수가 많아 GitHub 웹 UI로 폴더째 올릴 수 없어서 zip 하나로 묶어둠)
+      # 자세한 출처와 갱신 방법은 rethink-vendor.zip 안의 VENDORED_FROM.md 참고.
+      - name: Extract vendored rethink source
+        shell: pwsh
+        run: |
+          Expand-Archive -Path "rethink-vendor.zip" -DestinationPath "."
 
-      - name: Build rethink-cloud
-        working-directory: rethink-src
+      - name: Build rethink-cloud (vendored)
+        working-directory: rethink-vendor
         run: |
           npm ci
           npm run build
@@ -128,8 +125,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$dist/data" | Out-Null
 
           Copy-Item -Recurse -Force "node-portable/*" "$dist/runtime/node/"
-          Copy-Item -Recurse -Force "rethink-src/dist/*" "$dist/runtime/rethink/dist/"
-          Copy-Item -Recurse -Force "rethink-src/node_modules" "$dist/runtime/rethink/node_modules"
+          Copy-Item -Recurse -Force "rethink-vendor/dist/*" "$dist/runtime/rethink/dist/"
+          Copy-Item -Recurse -Force "rethink-vendor/node_modules" "$dist/runtime/rethink/node_modules"
+          Copy-Item -Force "rethink-vendor/package.json" "$dist/runtime/rethink/package.json"
 
           $windivertDir = Get-ChildItem -Path "windivert-extract" -Directory | Select-Object -First 1
           $arch = Join-Path $windivertDir.FullName "x64"
@@ -146,7 +144,7 @@ jobs:
       - name: Write runtime manifest
         shell: pwsh
         run: |
-          $rethinkCommit = (git -C rethink-src rev-parse HEAD).Trim()
+          $rethinkCommit = (Get-Content "rethink-vendor/.vendor-commit" -Raw).Trim()
           $manifest = @{
             node_version = "20.15.1"
             windivert_version = "2.2.2"
