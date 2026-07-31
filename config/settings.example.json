@@ -1,5 +1,6 @@
 {
   "_설명": "이 파일을 복사해서 config/settings.json 으로 저장한 뒤 값을 채우세요.",
   "gateway_ip": "192.168.0.1",
-  "rethink_host": "127.0.0.1"
+  "rethink_host": "127.0.0.1",
+  "update_channel": "stable"
 }
