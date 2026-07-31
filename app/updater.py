@@ -33,7 +33,7 @@ from .version import APP_VERSION
 logger = logging.getLogger("updater")
 
 # "owner/repo" 형태. 실제 저장소 이름에 맞게 바꾸세요.
-GITHUB_REPO = "Murianwind/LGLocalManager"
+GITHUB_REPO = "Murianwind/lg_local_manager"
 API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 
 # 업데이트 시 사용자 데이터를 보존하기 위해 건드리지 않을 상대 경로(폴더 단위).
