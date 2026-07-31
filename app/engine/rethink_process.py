@@ -78,7 +78,6 @@ class RethinkProcess:
                     [
                         str(self.node_exe),
                         str(self.rethink_entry),
-                        "--config",
                         str(self.config_path),
                     ],
                     cwd=str(self.cwd),
