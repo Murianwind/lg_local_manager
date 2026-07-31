@@ -37,12 +37,14 @@ jobs:
         shell: pwsh
         run: |
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            # [수동 실행] 타임스탬프 태그 생성 / 버전 업데이트 안 함 / 프리 릴리스
             $tag = "v" + (Get-Date -Format "yyyyMMdd-HHmmss")
             echo "TAG_NAME=$tag" >> $env:GITHUB_ENV
             echo "SHOULD_UPDATE_VERSION=false" >> $env:GITHUB_ENV
             echo "PRERELEASE=true" >> $env:GITHUB_ENV
             echo "Mode: Manual (No version update, Pre-release)"
           } else {
+            # [릴리스 발행] 태그 사용 / 버전 업데이트 수행 / 정식 릴리스
             $tag = "${{ github.event.release.tag_name }}"
             $cleanVer = $tag.TrimStart('v')
             echo "TAG_NAME=$tag" >> $env:GITHUB_ENV
@@ -52,6 +54,7 @@ jobs:
             echo "Mode: Release (Version update to $cleanVer, Official)"
           }
 
+      # ── 2. 소스 코드 내 APP_VERSION 수정 (릴리스 발행 시에만 실행) ──
       - name: Update APP_VERSION in Python Script
         if: env.SHOULD_UPDATE_VERSION == 'true'
         shell: pwsh
@@ -61,12 +64,14 @@ jobs:
           (Get-Content $filePath) -replace 'APP_VERSION = ".*"', "APP_VERSION = `"$newVersion`"" | Set-Content $filePath
           echo "Updated APP_VERSION to $newVersion"
 
+      # ── 2-1. 변경된 소스 코드를 저장소로 다시 Push ──
       - name: Commit and Push Version Change
         if: env.SHOULD_UPDATE_VERSION == 'true'
         shell: pwsh
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
           git add app/version.py
           git commit -m "chore: update version to ${{ env.CLEAN_VERSION }} [skip ci]"
           git push origin HEAD:${{ github.event.release.target_commitish }}
@@ -74,10 +79,17 @@ jobs:
       - name: Build LGLocalManager.exe with PyInstaller
         run: pyinstaller build.spec
 
+      # ── 3. rethink-cloud (Node.js) 체크아웃 & 빌드 ──
+      # PR #107 (https://github.com/anszom/rethink/pull/107) 은 아직 master에
+      # 머지되지 않았다. 우리가 쓰는 핵심 기능(요청받은 SNI별 인증서 발급,
+      # bridge 활성화 시 기존 LG 등록 유지, advertise_requested_host)이 전부
+      # 이 PR에만 있으므로, master가 아니라 이 PR의 head를 직접 받는다.
+      # PR이 머지되면 ref를 다시 master로 되돌려도 된다.
       - name: Checkout rethink source
         uses: actions/checkout@v4
         with:
           repository: anszom/rethink
+          ref: refs/pull/107/head
           path: rethink-src
 
       - name: Build rethink-cloud
@@ -86,6 +98,7 @@ jobs:
           npm ci
           npm run build
 
+      # ── 4. 포터블 Node.js 런타임 다운로드 ──
       - name: Download portable Node.js runtime
         shell: pwsh
         run: |
@@ -95,6 +108,7 @@ jobs:
           Expand-Archive node.zip -DestinationPath node-runtime
           Move-Item "node-runtime/node-v$nodeVersion-win-x64" "node-portable"
 
+      # ── 5. WinDivert 바이너리 다운로드 ──
       - name: Download WinDivert
         shell: pwsh
         run: |
@@ -103,6 +117,7 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile windivert.zip
           Expand-Archive windivert.zip -DestinationPath windivert-extract
 
+      # ── 6. 배포 폴더 조립 (Full 패키지) ──
       - name: Assemble release folder
         shell: pwsh
         run: |
@@ -115,8 +130,7 @@ jobs:
           Copy-Item -Recurse -Force "node-portable/*" "$dist/runtime/node/"
           Copy-Item -Recurse -Force "rethink-src/dist/*" "$dist/runtime/rethink/dist/"
           Copy-Item -Recurse -Force "rethink-src/node_modules" "$dist/runtime/rethink/node_modules"
-          Copy-Item -Force "rethink-src/package.json" "$dist/runtime/rethink/package.json"
-          
+
           $windivertDir = Get-ChildItem -Path "windivert-extract" -Directory | Select-Object -First 1
           $arch = Join-Path $windivertDir.FullName "x64"
           Copy-Item "$arch/WinDivert.dll" "$dist/WinDivert.dll"
@@ -141,11 +155,13 @@ jobs:
           $manifest | ConvertTo-Json | Set-Content -Path "runtime-manifest.json" -Encoding utf8
           Copy-Item "runtime-manifest.json" "dist/LGLocalManager/runtime-manifest.json"
 
+      # ── 7. Full zip (처음 설치용, 전체 패키지) ──
       - name: Create Full ZIP archive
         shell: pwsh
         run: |
           Compress-Archive -Path "dist/LGLocalManager/*" -DestinationPath "LGLocalManager-Full-${{ env.TAG_NAME }}-win-x64.zip"
 
+      # ── 8. Update zip (exe만, 기존 설치 위 덮어쓰기용) ──
       - name: Create Update ZIP archive
         shell: pwsh
         run: |
@@ -153,6 +169,7 @@ jobs:
           Copy-Item "dist/LGLocalManager.exe" "dist/update-only/LGLocalManager.exe"
           Compress-Archive -Path "dist/update-only/*" -DestinationPath "LGLocalManager-Update-${{ env.TAG_NAME }}-win-x64.zip"
 
+      # ── 9. 릴리스 업로드 (두 zip + 매니페스트) ──
       - name: Upload Assets to Release
         uses: softprops/action-gh-release@v2
         with:
