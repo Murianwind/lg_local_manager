@@ -37,7 +37,8 @@ DNAT를 지원하지 않는 공유기(IPTIME 순정 등)에서도, PC 하나로 
 
 ## 설치 및 실행
 
-1. [Releases](../../releases) 에서 `LGLocalManager-*-win-x64.zip` 다운로드 후 압축 해제
+1. [Releases](../../releases) 에서 **`LGLocalManager-Full-*-win-x64.zip`**(처음 설치용, 전체 패키지)
+   다운로드 후 압축 해제
 2. Npcap 설치 (아직 안 했다면)
 3. `config/settings.example.json` → `config/settings.json` 으로 복사, 게이트웨이 IP 등 입력
 4. `config/rethink-config.example.json` → `config/rethink-config.json` 으로 복사,
@@ -45,6 +46,46 @@ DNAT를 지원하지 않는 공유기(IPTIME 순정 등)에서도, PC 하나로 
 5. `LGLocalManager.exe` 실행 (관리자 권한 요청 창이 뜨면 승인)
 6. 트레이 아이콘 우클릭 → **기기 관리** → 이름/MAC/IP 입력 후 추가
 7. 잠시 뒤 트레이 → **rethink 웹 UI 열기** 에서 기기가 올라왔는지 확인 → bridge 활성화
+
+## Windows 시작 시 자동 실행
+
+트레이 메뉴의 **"Windows 시작 시 자동 실행"** 항목을 체크하면 됩니다. 이 앱은 관리자 권한이
+필요해서(WinDivert/ARP 스푸핑), 일반적인 "시작 프로그램 폴더" 방식은 부팅마다 UAC 승인 창이
+뜹니다. 대신 내부적으로 **작업 스케줄러(Task Scheduler)**에 "로그온 시 + 가장 높은 권한으로
+실행" 트리거로 등록해서, UAC 프롬프트 없이 조용히 관리자 권한으로 자동 실행되게 합니다.
+등록/해제 상태는 `schtasks /Query /TN LGLocalManager_AutoStart` 로 직접 확인할 수도 있습니다.
+
+## 업데이트 확인 및 자동 설치
+
+트레이 메뉴 상단에 **"현재 버전: vX.X.X (클릭하여 확인)"** 이 표시됩니다. 클릭하면 그 즉시
+GitHub Releases를 조회해 새 버전이 있는지 확인합니다(백그라운드 자동 주기 체크는 하지 않습니다).
+
+**업데이트 채널**은 두 가지입니다 (트레이 메뉴 → "업데이트 채널"):
+
+- **Stable** — `release` 발행(정식 태그, `prerelease == false`)으로 만들어진 릴리즈만 인식합니다.
+- **Beta** — `workflow_dispatch`로 수동 빌드한 것(타임스탬프 태그, `prerelease == true`)까지
+  포함해 가장 최근 릴리즈를 인식합니다.
+
+채널은 `config/settings.json`의 `update_channel` 값(`"stable"` 또는 `"beta"`)으로 저장되며,
+채널을 바꾸면 이전에 감지해둔 업데이트 정보는 초기화됩니다(다시 클릭해서 확인해야 함).
+
+새 버전이 확인되면 트레이 알림이 뜨고 메뉴에 **"업데이트 설치"** 항목이 나타납니다.
+
+**Full 재설치가 필요한지는 앱이 자동으로 판단합니다.** 릴리즈마다 Node/rethink/WinDivert
+버전 지문이 담긴 작은 `runtime-manifest.json`이 함께 올라가는데, 앱은 이 파일만 먼저
+조회해서 자기 폴더의 `runtime-manifest.json`과 비교합니다:
+
+- **같음** → runtime은 안 바뀐 것 → **`LGLocalManager-Update-*.zip`**(exe만, 수 MB)만 받아서
+  `LGLocalManager.exe` 하나만 교체
+- **다름 / 로컬 파일 없음** → Node·rethink·WinDivert 중 뭔가 바뀐 것 → 안전하게
+  **`LGLocalManager-Full-*.zip`**(전체 패키지)을 받아서, `config/`·`data/`(사용자 설정·기기
+  목록·로그)는 보존하고 나머지 전체를 교체
+
+트레이 알림에 어느 쪽으로 처리될지("간단 업데이트" / "전체 재설치")가 함께 표시됩니다.
+어느 쪽이든 앱이 정상 종료 절차를 거쳐 스스로 꺼지고, 백그라운드 스크립트가 파일을 교체한 뒤
+재실행하며, 다운로드에 썼던 임시 폴더를 스스로 정리합니다.
+
+`app/updater.py`의 `GITHUB_REPO` 상수가 실제 저장소 이름(`owner/repo`)과 일치해야 합니다.
 
 ## devices.json 형식
 

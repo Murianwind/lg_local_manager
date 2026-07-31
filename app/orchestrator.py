@@ -43,7 +43,7 @@ class Orchestrator:
         self.redirect_engine = RedirectEngine(
             rethink_host=rethink_host,
             https_port=store.rethink_ports["https_port"],
-            mqtt_port=store.rethink_ports["mqtt_port"],
+            mqtt_port=store.rethink_ports["mqtts_port"],
         )
         self.rethink_process = RethinkProcess(
             node_exe=runtime_dir / "node" / "node.exe",

@@ -124,7 +124,7 @@ def main() -> None:
     def open_rethink_ui(_icon=None, _item=None):
         import webbrowser
 
-        port = store.rethink_ports["mgmt_port"]
+        port = store.rethink_ports["management_port"]
         webbrowser.open(f"http://127.0.0.1:{port}")
 
     def open_log(_icon=None, _item=None):
@@ -162,15 +162,33 @@ def main() -> None:
     def current_channel() -> str:
         return settings.get("update_channel", "stable")
 
+    def show_result_popup(title: str, message: str) -> None:
+        def _show():
+            import tkinter as tk
+            from tkinter import messagebox
+
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo(title, message)
+            root.destroy()
+
+        threading.Thread(target=_show, daemon=True).start()
+
     def check_update_now(icon_=None, notify_if_none: bool = False):
         nonlocal pending_update
         if checking_update.is_set():
             return
         checking_update.set()
+        logger.info("업데이트 확인 시작 (채널: %s)", current_channel())
         try:
             info = updater.check_for_update(app_dir(), channel=current_channel())
             with update_lock:
                 pending_update = info
+            if info:
+                kind = "전체 재설치" if info.requires_full else "간단 업데이트"
+                logger.info("업데이트 확인 결과: 새 버전 %s 있음 (%s)", info.version, kind)
+            else:
+                logger.info("업데이트 확인 결과: 이미 최신 버전입니다 (현재 v%s)", APP_VERSION)
             if icon_:
                 icon_.update_menu()
                 if info:
@@ -180,8 +198,15 @@ def main() -> None:
                         "트레이 메뉴에서 설치할 수 있습니다.",
                         APP_NAME,
                     )
+                    if notify_if_none:  # 사용자가 직접 클릭해서 확인한 경우에만 팝업
+                        show_result_popup(
+                            APP_NAME,
+                            f"새 버전 {info.version} 이 있습니다 ({kind}).\n"
+                            "트레이 메뉴의 '업데이트 설치'로 설치할 수 있습니다.",
+                        )
                 elif notify_if_none:
                     icon_.notify("이미 최신 버전입니다.", APP_NAME)
+                    show_result_popup(APP_NAME, f"이미 최신 버전입니다 (v{APP_VERSION}).")
         finally:
             checking_update.clear()
 
@@ -252,7 +277,7 @@ def main() -> None:
         pystray.MenuItem(
             "업데이트 설치",
             install_update,
-            visible=lambda _item: pending_update is not None,
+            visible=lambda _item: pending_update is not None and not checking_update.is_set(),
         ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("종료", quit_app),

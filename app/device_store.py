@@ -8,8 +8,8 @@ devices.json 을 읽고 쓰는 저장소.
 {
   "rethink": {
     "https_port": 4433,
-    "mqtt_port": 8883,
-    "mgmt_port": 44401
+    "mqtts_port": 8884,
+    "management_port": 44401
   },
   "devices": [
     {
@@ -34,10 +34,12 @@ from typing import Callable
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 IPV4_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
 
+# rethink 자체의 config.json 기본값과 맞춘 것 (mqtts_port가 기기가 실제로 붙는
+# TLS MQTT 포트다 — mqtt_port(1884)는 로컬 디버그용 평문 포트라 우리 용도와 무관).
 DEFAULT_RETHINK_PORTS = {
     "https_port": 4433,
-    "mqtt_port": 8883,
-    "mgmt_port": 44401,
+    "mqtts_port": 8884,
+    "management_port": 44401,
 }
 
 
