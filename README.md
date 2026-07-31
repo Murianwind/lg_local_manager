@@ -36,6 +36,11 @@ DNAT를 지원하지 않는 공유기(IPTIME 순정 등)에서도, PC 하나로 
 - [Npcap](https://npcap.com/#download) — 설치 시 **"WinPcap API-compatible Mode"** 체크
   (raw 패킷 캡처/전송용 드라이버. 자동 설치는 하지 않으므로 최초 1회 직접 설치해야 합니다)
 - WinDivert.dll / WinDivert64.sys — release zip에 이미 포함되어 있어 별도 설치 불필요
+- `openssl.exe` — rethink-cloud가 인증서 발급에 커맨드로 직접 사용합니다. **release zip에
+  이미 번들되어 있어 별도 설치가 필요 없습니다** (Git for Windows의 `usr/bin`을 그대로
+  가져와 `runtime/openssl/`에 포함시켰습니다 — 출처는 GPL-2.0, `.gitignore`로 빌드 시에만
+  받아지므로 저장소에는 없습니다). 번들된 사본을 최우선으로 쓰고, 없을 경우에만
+  시스템 PATH나 별도 설치된 Git for Windows를 찾아봅니다.
 
 ## 설치 및 실행
 
@@ -176,3 +181,7 @@ cd ..
 `rethink-vendor.zip`에 벤더링된 rethink는 GPL-2.0이며, 원본 저작권은
 [anszom](https://github.com/anszom/rethink)에게 있습니다. 출처와 정확한 커밋은
 그 zip 안의 `VENDORED_FROM.md`를 참고하세요.
+
+빌드 시 `runtime/openssl/`에 번들되는 openssl.exe와 그 실행에 필요한 라이브러리는
+[Git for Windows](https://github.com/git-for-windows/git)의 `usr/bin`에서 그대로 가져온
+것이며, GPL-2.0으로 배포됩니다.

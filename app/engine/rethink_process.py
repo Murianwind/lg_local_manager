@@ -15,10 +15,13 @@ rethink 자체는 재구현하지 않는다 (TLV 파서, 인증서 발급, bridg
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 import time
 from pathlib import Path
+
+from .. import prereq
 
 logger = logging.getLogger("rethink_process")
 
@@ -29,6 +32,7 @@ class RethinkProcess:
         node_exe: Path,
         rethink_entry: Path,
         config_path: Path,
+        app_dir: Path | None = None,
         cwd: Path | None = None,
         restart_delay_sec: float = 3.0,
         log_callback=None,
@@ -36,6 +40,7 @@ class RethinkProcess:
         self.node_exe = node_exe
         self.rethink_entry = rethink_entry
         self.config_path = config_path
+        self.app_dir = app_dir
         self.cwd = cwd or rethink_entry.parent
         self.restart_delay_sec = restart_delay_sec
         self.log_callback = log_callback or (lambda line: None)
@@ -70,6 +75,19 @@ class RethinkProcess:
             except Exception:  # noqa: BLE001
                 self._proc.kill()
 
+    def _build_env(self) -> dict:
+        env = os.environ.copy()
+        openssl_dir = prereq.find_openssl_dir(self.app_dir)
+        if openssl_dir:
+            env["PATH"] = str(openssl_dir) + os.pathsep + env.get("PATH", "")
+            logger.info("openssl 경로를 PATH에 추가: %s", openssl_dir)
+        else:
+            logger.warning(
+                "openssl.exe를 찾지 못했습니다 — rethink-cloud의 인증서 발급이 "
+                "실패할 수 있습니다 (Git for Windows 설치를 권장합니다)."
+            )
+        return env
+
     def _run_and_watch(self) -> None:
         while not self._stop_event.is_set():
             try:
@@ -81,6 +99,7 @@ class RethinkProcess:
                         str(self.config_path),
                     ],
                     cwd=str(self.cwd),
+                    env=self._build_env(),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,

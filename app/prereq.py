@@ -54,6 +54,34 @@ def windivert_files_present(app_dir: Path) -> bool:
 
 NPCAP_DOWNLOAD_URL = "https://npcap.com/#download"
 
+# rethink-cloud는 인증서 발급을 openssl 커맨드로 직접 처리한다. Windows엔 기본
+# 내장이 없어서, 앱 배포 zip에 Git for Windows의 usr/bin(openssl.exe 포함)을
+# runtime/openssl/ 로 번들해뒀다 — 1순위는 그 번들, 그다음은 시스템에 이미 있는 것.
+_OPENSSL_CANDIDATE_DIRS = [
+    r"C:\Program Files\Git\usr\bin",
+    r"C:\Program Files (x86)\Git\usr\bin",
+]
+
+
+def find_openssl_dir(app_dir: Path | None = None) -> Path | None:
+    """openssl.exe가 있는 폴더를 찾는다. 번들 → PATH → 시스템 Git 순으로 본다."""
+    import shutil
+
+    if app_dir is not None:
+        bundled = app_dir / "runtime" / "openssl" / "openssl.exe"
+        if bundled.exists():
+            return bundled.parent
+
+    found = shutil.which("openssl")
+    if found:
+        return Path(found).parent
+
+    for candidate in _OPENSSL_CANDIDATE_DIRS:
+        exe = Path(candidate) / "openssl.exe"
+        if exe.exists():
+            return exe.parent
+    return None
+
 
 def check_all(app_dir: Path) -> list[str]:
     """문제 목록을 반환한다. 비어 있으면 실행 준비 완료."""
@@ -69,5 +97,12 @@ def check_all(app_dir: Path) -> list[str]:
         problems.append(
             "WinDivert.dll / WinDivert64.sys 파일을 찾을 수 없습니다. "
             "release 패키지가 손상되었을 수 있습니다."
+        )
+    if find_openssl_dir(app_dir) is None:
+        problems.append(
+            "openssl.exe를 찾지 못했습니다. rethink-cloud가 인증서를 발급하지 못해 "
+            "시작에 실패합니다. release 패키지가 손상되었을 수 있습니다 (runtime/openssl/ "
+            "폴더 확인 필요) — 또는 Git for Windows(https://git-scm.com/download/win)를 "
+            "설치하면 자동으로 인식합니다."
         )
     return problems

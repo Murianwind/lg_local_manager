@@ -48,6 +48,7 @@ class Orchestrator:
         self.rethink_process = RethinkProcess(
             node_exe=runtime_dir / "node" / "node.exe",
             rethink_entry=runtime_dir / "rethink" / "dist" / "rethink-cloud.js",
+            app_dir=runtime_dir.parent,
             config_path=config_dir / "rethink-config.json",
             log_callback=self._on_rethink_log,
         )
