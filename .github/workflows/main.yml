@@ -117,13 +117,13 @@ jobs:
         run: |
           $dist = "dist/LGLocalManager"
           New-Item -ItemType Directory -Force -Path "$dist/runtime/node" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$dist/runtime/rethink" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$dist/runtime/rethink/dist" | Out-Null
           New-Item -ItemType Directory -Force -Path "$dist/config" | Out-Null
           New-Item -ItemType Directory -Force -Path "$dist/data" | Out-Null
 
           Copy-Item -Recurse -Force "node-portable/*" "$dist/runtime/node/"
           Copy-Item -Recurse -Force "rethink-src/dist/*" "$dist/runtime/rethink/dist/"
-          Copy-Item -Recurse -Force "rethink-src/node_modules" "$dist/runtime/rethink/node_modules/"
+          Copy-Item -Recurse -Force "rethink-src/node_modules" "$dist/runtime/rethink/node_modules"
 
           $windivertDir = Get-ChildItem -Path "windivert-extract" -Directory | Select-Object -First 1
           $arch = Join-Path $windivertDir.FullName "amd64"
