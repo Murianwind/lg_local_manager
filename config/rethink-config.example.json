@@ -1,0 +1,8 @@
+{
+  "_설명": "rethink-cloud 자체의 config.json 입니다. 스키마는 원본 프로젝트(anszom/rethink)의 config.json을 그대로 따릅니다. 이 파일을 rethink-config.json으로 복사해 hostname, https_port.bind, mqtt 브로커 정보 등을 채우세요.",
+  "hostname": "example.local",
+  "https_port": {
+    "bind": 4433
+  },
+  "advertise_requested_host": true
+}
