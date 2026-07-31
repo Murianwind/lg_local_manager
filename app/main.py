@@ -14,7 +14,7 @@ from pathlib import Path
 import pystray
 from PIL import Image, ImageDraw
 
-from . import prereq
+from . import prereq, startup
 from .device_store import DeviceStore, watch
 from .gui import DeviceWindow
 from .orchestrator import Orchestrator
@@ -128,10 +128,34 @@ def main() -> None:
         orchestrator.stop()
         icon_.stop()
 
+    def is_autostart_enabled(_item=None) -> bool:
+        try:
+            return startup.is_registered()
+        except Exception:  # noqa: BLE001
+            return False
+
+    def toggle_autostart(icon_, _item=None):
+        try:
+            if startup.is_registered():
+                startup.unregister()
+                icon_.notify("시작 프로그램 등록을 해제했습니다.", APP_NAME)
+            else:
+                startup.register()
+                icon_.notify("Windows 시작 시 자동으로 실행되도록 등록했습니다.", APP_NAME)
+        except Exception as e:  # noqa: BLE001
+            logger.error("시작 프로그램 등록/해제 실패: %s", e)
+            icon_.notify(f"시작 프로그램 설정 실패: {e}", APP_NAME)
+
     menu = pystray.Menu(
         pystray.MenuItem("기기 관리...", open_devices_window, default=True),
         pystray.MenuItem("rethink 웹 UI 열기", open_rethink_ui),
         pystray.MenuItem("로그 열기", open_log),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(
+            "Windows 시작 시 자동 실행",
+            toggle_autostart,
+            checked=is_autostart_enabled,
+        ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("종료", quit_app),
     )
