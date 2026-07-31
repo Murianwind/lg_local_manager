@@ -115,7 +115,8 @@ jobs:
           Copy-Item -Recurse -Force "node-portable/*" "$dist/runtime/node/"
           Copy-Item -Recurse -Force "rethink-src/dist/*" "$dist/runtime/rethink/dist/"
           Copy-Item -Recurse -Force "rethink-src/node_modules" "$dist/runtime/rethink/node_modules"
-
+          Copy-Item -Force "rethink-src/package.json" "$dist/runtime/rethink/package.json"
+          
           $windivertDir = Get-ChildItem -Path "windivert-extract" -Directory | Select-Object -First 1
           $arch = Join-Path $windivertDir.FullName "x64"
           Copy-Item "$arch/WinDivert.dll" "$dist/WinDivert.dll"
