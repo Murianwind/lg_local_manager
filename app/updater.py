@@ -1,28 +1,26 @@
 """
 GitHub Releases 기반 업데이트 확인 + 자동 설치.
 
-릴리즈마다 zip이 두 개 올라온다 (.github/workflows/build.yml 참고):
-  - LGLocalManager-Full-*.zip   : 처음 설치용, runtime/(Node, rethink)와 WinDivert
-                                   파일까지 포함한 전체 패키지 (용량 큼)
-  - LGLocalManager-Update-*.zip : LGLocalManager.exe 하나만 (앱 코드가 바뀌는
-                                   업데이트는 이 exe 하나만 바뀌므로, runtime은
-                                   그대로 두고 이것만 받으면 됨 — 훨씬 작고 빠름)
+릴리즈마다 세 가지 자산이 올라온다 (.github/workflows/build.yml 참고):
+  - LGLocalManager-Full-*.zip     : 처음 설치용, runtime/(Node, rethink)와 WinDivert
+                                     파일까지 포함한 전체 패키지 (용량 큼)
+  - LGLocalManager-Update-*.zip   : LGLocalManager.exe 하나만 (앱 코드만 바뀌었을 때)
+  - runtime-manifest.json          : Node 버전, WinDivert 버전, rethink 커밋 해시를
+                                     담은 작은 지문 파일
 
-이 모듈은 항상 "Update" zip을 찾아서 그것만 받는다. exe 하나만 교체하면 되므로
-config/data 보존 로직도 필요 없다 — 애초에 그 폴더들을 건드리지 않는다.
+동작 원리 (Full/Update 자동 판단):
+  1) 새 릴리즈의 runtime-manifest.json만 먼저 받아온다 (zip을 통째로 받지 않고,
+     이 작은 파일 하나만 조회하므로 빠르다).
+  2) 앱 폴더에 있는 로컬 runtime-manifest.json과 비교한다.
+     - 완전히 같다 -> runtime(Node/rethink/WinDivert)은 안 바뀐 것 -> Update zip(exe만)
+     - 다르거나 로컬 파일이 없다 -> runtime이 바뀐 것 -> Full zip(전체 재설치)
+  3) Full 설치일 때는 config/data(사용자 설정·기기 목록·로그)는 보존하고 나머지
+     전부를 교체한다. Update 설치일 때는 exe 파일 하나만 교체한다.
 
-두 가지 채널을 구분한다:
-  - stable: GitHub Release 발행(release: published) 트리거로 만들어진, 정식 태그
-            버전의 릴리즈만 인식한다 (prerelease == False).
-  - beta:   workflow_dispatch로 수동 빌드된 것(타임스탬프 태그, prerelease == True)
-            까지 포함해 가장 최근 릴리즈를 인식한다.
-
-실행 중인 exe는 자기 자신을 덮어쓸 수 없으므로, 새 exe를 내려받아 임시 폴더에
-풀어놓은 뒤, 별도의 짧은 PowerShell 스크립트를 띄워서:
-  1) 지금 프로세스(PID)가 완전히 끝날 때까지 기다리고
-  2) LGLocalManager.exe 파일 하나만 교체한 뒤
-  3) 다시 실행하고
-  4) 다운로드에 썼던 임시 폴더를 스스로 지운다.
+두 가지 배포 채널도 구분한다:
+  - stable: GitHub Release 발행(release: published)으로 만들어진 정식 태그만 인식
+            (prerelease == False)
+  - beta:   workflow_dispatch 수동 빌드(타임스탬프 태그, prerelease == True)까지 포함
 """
 
 from __future__ import annotations
@@ -47,8 +45,12 @@ logger = logging.getLogger("updater")
 GITHUB_REPO = "Murianwind/lg_local_manager"
 API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 
-# release 자산 중 "업데이트용(exe만)" zip을 골라낼 때 쓰는 패턴.
+MANIFEST_ASSET_NAME = "runtime-manifest.json"
 UPDATE_ASSET_PATTERN = re.compile(r"update", re.IGNORECASE)
+FULL_ASSET_PATTERN = re.compile(r"full", re.IGNORECASE)
+
+# Full 설치 시 보존할(교체하지 않을) 최상위 경로.
+PRESERVE_PATHS = ("config", "data")
 
 UpdateChannel = Literal["stable", "beta"]
 
@@ -57,9 +59,11 @@ UpdateChannel = Literal["stable", "beta"]
 class UpdateInfo:
     tag_name: str
     version: str
-    download_url: str
     notes: str
     prerelease: bool
+    update_zip_url: str | None
+    full_zip_url: str | None
+    requires_full: bool
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -84,31 +88,55 @@ def _fetch_releases(timeout: float) -> list[dict]:
 def _pick_release(releases: list[dict], channel: UpdateChannel) -> dict | None:
     if not releases:
         return None
-    # GitHub API는 기본적으로 최신 생성순으로 내려준다.
     candidates = [r for r in releases if not r.get("draft")]
     if channel == "stable":
         candidates = [r for r in candidates if not r.get("prerelease")]
     if not candidates:
         return None
-    return candidates[0]
+    return candidates[0]  # GitHub API는 최신 생성순으로 내려준다.
 
 
-def _pick_update_asset(assets: list[dict]) -> dict | None:
-    """'Update' 이름이 들어간 zip 자산을 우선 찾는다."""
-    zips = [a for a in assets if a["name"].lower().endswith(".zip")]
-    update_assets = [a for a in zips if UPDATE_ASSET_PATTERN.search(a["name"])]
-    if update_assets:
-        return update_assets[0]
-    logger.warning(
-        "Update 전용 zip을 찾지 못했습니다. 릴리즈 자산 이름에 'update'가 포함되어야 합니다."
-    )
-    return None
+def _find_asset(assets: list[dict], pattern: re.Pattern, ext: str = ".zip") -> dict | None:
+    matches = [
+        a for a in assets if a["name"].lower().endswith(ext) and pattern.search(a["name"])
+    ]
+    return matches[0] if matches else None
+
+
+def _fetch_json_asset(asset: dict, timeout: float) -> dict | None:
+    try:
+        resp = requests.get(asset["browser_download_url"], timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("매니페스트(%s) 조회 실패: %s", asset.get("name"), e)
+        return None
+
+
+def _local_manifest_path(app_dir: Path) -> Path:
+    return app_dir / MANIFEST_ASSET_NAME
+
+
+def _read_local_manifest(app_dir: Path) -> dict | None:
+    path = _local_manifest_path(app_dir)
+    if not path.exists():
+        return None
+    try:
+        import json
+
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("로컬 runtime-manifest.json 읽기 실패: %s", e)
+        return None
 
 
 def check_for_update(
-    channel: UpdateChannel = "stable", timeout: float = 10.0
+    app_dir: Path, channel: UpdateChannel = "stable", timeout: float = 10.0
 ) -> UpdateInfo | None:
-    """선택한 채널 기준으로 최신 릴리즈를 조회한다. 새 버전이 없으면 None."""
+    """
+    선택한 채널 기준으로 최신 릴리즈를 조회한다.
+    새 버전이 없으면 None. 있으면 Full/Update 여부까지 판단해서 반환한다.
+    """
     try:
         releases = _fetch_releases(timeout)
     except Exception as e:  # noqa: BLE001
@@ -123,20 +151,52 @@ def check_for_update(
     if not tag or not is_newer(tag):
         return None
 
-    asset = _pick_update_asset(data.get("assets", []))
-    if asset is None:
+    assets = data.get("assets", [])
+    update_asset = _find_asset(assets, UPDATE_ASSET_PATTERN)
+    full_asset = _find_asset(assets, FULL_ASSET_PATTERN)
+    manifest_asset = next(
+        (a for a in assets if a["name"] == MANIFEST_ASSET_NAME), None
+    )
+
+    requires_full = True  # 매니페스트를 못 구하면 안전하게 Full로 판단
+    if manifest_asset is not None:
+        remote_manifest = _fetch_json_asset(manifest_asset, timeout)
+        local_manifest = _read_local_manifest(app_dir)
+        if remote_manifest is not None and local_manifest is not None:
+            requires_full = remote_manifest != local_manifest
+        elif remote_manifest is not None and local_manifest is None:
+            logger.info("로컬 매니페스트가 없어 Full 설치로 판단합니다 (최초 설치 이후 처음 업데이트?).")
+            requires_full = True
+        else:
+            logger.warning("원격 매니페스트를 못 구해 안전하게 Full 설치로 판단합니다.")
+            requires_full = True
+    else:
+        logger.warning("릴리즈에 runtime-manifest.json이 없어 안전하게 Full 설치로 판단합니다.")
+
+    if requires_full and full_asset is None:
+        logger.error("Full 설치가 필요하지만 Full zip 자산을 찾지 못했습니다.")
         return None
+    if not requires_full and update_asset is None:
+        # Update 전용 zip이 없으면 Full로라도 대체
+        if full_asset is not None:
+            logger.warning("Update 전용 zip이 없어 Full zip으로 대체합니다.")
+            requires_full = True
+        else:
+            logger.error("Update/Full zip 모두 찾지 못했습니다.")
+            return None
 
     return UpdateInfo(
         tag_name=tag,
         version=tag.lstrip("vV"),
-        download_url=asset["browser_download_url"],
         notes=data.get("body", ""),
         prerelease=bool(data.get("prerelease")),
+        update_zip_url=update_asset["browser_download_url"] if update_asset else None,
+        full_zip_url=full_asset["browser_download_url"] if full_asset else None,
+        requires_full=requires_full,
     )
 
 
-def _download(url: str, dest: Path, timeout: float = 60.0) -> None:
+def _download(url: str, dest: Path, timeout: float = 120.0) -> None:
     with requests.get(url, stream=True, timeout=timeout) as r:
         r.raise_for_status()
         with open(dest, "wb") as f:
@@ -144,62 +204,62 @@ def _download(url: str, dest: Path, timeout: float = 60.0) -> None:
                 f.write(chunk)
 
 
-_SWAP_SCRIPT_TEMPLATE = r'''
+_LIGHT_SWAP_SCRIPT = r'''
 $ErrorActionPreference = "Stop"
 $pid_to_wait = {pid}
 $newExe = "{new_exe}"
 $targetExe = "{target_exe}"
 $tmpDir = "{tmp_dir}"
 
-# 1) 기존 프로세스가 완전히 끝날 때까지 대기 (최대 30초)
 $count = 0
 while ((Get-Process -Id $pid_to_wait -ErrorAction SilentlyContinue) -and ($count -lt 60)) {{
     Start-Sleep -Milliseconds 500
     $count++
 }}
 
-# 2) exe 하나만 교체 (다른 파일/폴더는 건드리지 않음)
 Copy-Item -Force $newExe $targetExe
-
-# 3) 재실행
 Start-Process -FilePath $targetExe
 
-# 4) 다운로드에 쓴 임시 폴더 정리
+Start-Sleep -Seconds 2
+Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+'''
+
+_FULL_SWAP_SCRIPT = r'''
+$ErrorActionPreference = "Stop"
+$pid_to_wait = {pid}
+$sourceDir = "{source_dir}"
+$targetDir = "{target_dir}"
+$tmpDir = "{tmp_dir}"
+$exeName = "LGLocalManager.exe"
+$preserve = @({preserve_list})
+
+$count = 0
+while ((Get-Process -Id $pid_to_wait -ErrorAction SilentlyContinue) -and ($count -lt 60)) {{
+    Start-Sleep -Milliseconds 500
+    $count++
+}}
+
+Get-ChildItem -Path $sourceDir -Force | ForEach-Object {{
+    if ($preserve -contains $_.Name) {{
+        return
+    }}
+    $destPath = Join-Path $targetDir $_.Name
+    if (Test-Path $destPath) {{
+        Remove-Item -Recurse -Force $destPath
+    }}
+    Copy-Item -Recurse -Force $_.FullName $destPath
+}}
+
+Start-Process -FilePath (Join-Path $targetDir $exeName)
+
 Start-Sleep -Seconds 2
 Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 '''
 
 
-def apply_update(info: UpdateInfo, app_dir: Path, on_before_exit=None) -> None:
-    """새 exe를 내려받아 적용 스크립트를 띄우고, 앱을 종료시킨다."""
-    tmp_dir = Path(tempfile.mkdtemp(prefix="lglocalmanager-update-"))
-    zip_path = tmp_dir / "update.zip"
-    extract_dir = tmp_dir / "extracted"
-
-    logger.info("업데이트 다운로드 시작: %s", info.download_url)
-    _download(info.download_url, zip_path)
-
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(extract_dir)
-
-    new_exe = extract_dir / "LGLocalManager.exe"
-    if not new_exe.exists():
-        candidates = list(extract_dir.rglob("LGLocalManager.exe"))
-        if not candidates:
-            raise RuntimeError("압축 해제한 파일에서 LGLocalManager.exe를 찾지 못했습니다.")
-        new_exe = candidates[0]
-
-    script_content = _SWAP_SCRIPT_TEMPLATE.format(
-        pid=os.getpid(),
-        new_exe=str(new_exe),
-        target_exe=str(app_dir / "LGLocalManager.exe"),
-        tmp_dir=str(tmp_dir),
-    )
-    # 스크립트 자신은 tmp_dir '밖'에 둔다 (tmp_dir을 지울 때 자기 자신이 잠기지 않도록).
+def _launch_script(script_content: str) -> None:
     script_path = Path(tempfile.gettempdir()) / f"lglocalmanager_apply_{os.getpid()}.ps1"
     script_path.write_text(script_content, encoding="utf-8")
-
-    logger.info("업데이트 적용 스크립트 실행 후 종료합니다: %s -> %s", APP_VERSION, info.version)
     subprocess.Popen(
         [
             "powershell",
@@ -210,7 +270,81 @@ def apply_update(info: UpdateInfo, app_dir: Path, on_before_exit=None) -> None:
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
     )
 
+
+def _apply_light_update(info: UpdateInfo, app_dir: Path) -> None:
+    assert info.update_zip_url is not None
+    tmp_dir = Path(tempfile.mkdtemp(prefix="lglocalmanager-update-"))
+    zip_path = tmp_dir / "update.zip"
+    extract_dir = tmp_dir / "extracted"
+
+    logger.info("Update(exe만) 다운로드: %s", info.update_zip_url)
+    _download(info.update_zip_url, zip_path)
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(extract_dir)
+
+    new_exe = extract_dir / "LGLocalManager.exe"
+    if not new_exe.exists():
+        candidates = list(extract_dir.rglob("LGLocalManager.exe"))
+        if not candidates:
+            raise RuntimeError("Update zip에서 LGLocalManager.exe를 찾지 못했습니다.")
+        new_exe = candidates[0]
+
+    script = _LIGHT_SWAP_SCRIPT.format(
+        pid=os.getpid(),
+        new_exe=str(new_exe),
+        target_exe=str(app_dir / "LGLocalManager.exe"),
+        tmp_dir=str(tmp_dir),
+    )
+    _launch_script(script)
+
+
+def _apply_full_update(info: UpdateInfo, app_dir: Path) -> None:
+    assert info.full_zip_url is not None
+    tmp_dir = Path(tempfile.mkdtemp(prefix="lglocalmanager-update-"))
+    zip_path = tmp_dir / "update.zip"
+    extract_dir = tmp_dir / "extracted"
+
+    logger.info("Full(전체) 다운로드: %s", info.full_zip_url)
+    _download(info.full_zip_url, zip_path)
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(extract_dir)
+
+    source_dir = extract_dir
+    if not (source_dir / "LGLocalManager.exe").exists():
+        candidates = [
+            d for d in extract_dir.iterdir() if d.is_dir() and (d / "LGLocalManager.exe").exists()
+        ]
+        if candidates:
+            source_dir = candidates[0]
+        else:
+            raise RuntimeError("Full zip에서 LGLocalManager.exe를 찾지 못했습니다.")
+
+    preserve_list = ", ".join(f'"{p}"' for p in PRESERVE_PATHS)
+    script = _FULL_SWAP_SCRIPT.format(
+        pid=os.getpid(),
+        source_dir=str(source_dir),
+        target_dir=str(app_dir),
+        tmp_dir=str(tmp_dir),
+        preserve_list=preserve_list,
+    )
+    _launch_script(script)
+
+
+def apply_update(info: UpdateInfo, app_dir: Path, on_before_exit=None) -> None:
+    """
+    info.requires_full 에 따라 Update(exe만) 또는 Full(전체) 설치를 자동 선택해 적용한다.
+    적용 스크립트를 띄운 뒤 앱을 종료시킨다.
+    """
+    logger.info(
+        "업데이트 적용: %s -> %s (%s)",
+        APP_VERSION,
+        info.version,
+        "Full" if info.requires_full else "Update",
+    )
+    if info.requires_full:
+        _apply_full_update(info, app_dir)
+    else:
+        _apply_light_update(info, app_dir)
+
     if on_before_exit:
         on_before_exit()
-
-    # 정상 종료 절차를 앱(main.py)이 이어서 수행하도록, 여기선 트리거만 한다.
