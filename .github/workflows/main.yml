@@ -1,0 +1,150 @@
+name: Build and Release LGLocalManager
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build EXE on Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── 1. 상태 변수 설정 (수동/자동 완벽 분기) ──
+      - name: Set Build Context
+        id: context
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            # [수동 실행] 타임스탬프 태그 생성 / 버전 업데이트 안 함 / 프리 릴리스
+            $tag = "v" + (Get-Date -Format "yyyyMMdd-HHmmss")
+            echo "TAG_NAME=$tag" >> $env:GITHUB_ENV
+            echo "SHOULD_UPDATE_VERSION=false" >> $env:GITHUB_ENV
+            echo "PRERELEASE=true" >> $env:GITHUB_ENV
+            echo "Mode: Manual (No version update, Pre-release)"
+          } else {
+            # [릴리스 발행] 태그 사용 / 버전 업데이트 수행 / 정식 릴리스
+            $tag = "${{ github.event.release.tag_name }}"
+            $cleanVer = $tag.TrimStart('v')
+            echo "TAG_NAME=$tag" >> $env:GITHUB_ENV
+            echo "CLEAN_VERSION=$cleanVer" >> $env:GITHUB_ENV
+            echo "SHOULD_UPDATE_VERSION=true" >> $env:GITHUB_ENV
+            echo "PRERELEASE=false" >> $env:GITHUB_ENV
+            echo "Mode: Release (Version update to $cleanVer, Official)"
+          }
+
+      # ── 2. 소스 코드 내 APP_VERSION 수정 (릴리스 발행 시에만 실행) ──
+      - name: Update APP_VERSION in Python Script
+        if: env.SHOULD_UPDATE_VERSION == 'true'
+        shell: pwsh
+        run: |
+          $filePath = "app/version.py"
+          $newVersion = "${{ env.CLEAN_VERSION }}"
+          (Get-Content $filePath) -replace 'APP_VERSION = ".*"', "APP_VERSION = `"$newVersion`"" | Set-Content $filePath
+          echo "Updated APP_VERSION to $newVersion"
+
+      # ── 2-1. 변경된 소스 코드를 저장소로 다시 Push ──
+      - name: Commit and Push Version Change
+        if: env.SHOULD_UPDATE_VERSION == 'true'
+        shell: pwsh
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add app/version.py
+          git commit -m "chore: update version to ${{ env.CLEAN_VERSION }} [skip ci]"
+          git push origin HEAD:${{ github.event.release.target_commitish }}
+
+      - name: Build LGLocalManager.exe with PyInstaller
+        run: pyinstaller build.spec
+
+      # ── 3. rethink-cloud (Node.js) 체크아웃 & 빌드 ──
+      - name: Checkout rethink source
+        uses: actions/checkout@v4
+        with:
+          repository: anszom/rethink
+          path: rethink-src
+
+      - name: Build rethink-cloud
+        working-directory: rethink-src
+        run: |
+          npm ci
+          npm run build
+
+      # ── 4. 포터블 Node.js 런타임 다운로드 ──
+      - name: Download portable Node.js runtime
+        shell: pwsh
+        run: |
+          $nodeVersion = "20.15.1"
+          $url = "https://nodejs.org/dist/v$nodeVersion/node-v$nodeVersion-win-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile node.zip
+          Expand-Archive node.zip -DestinationPath node-runtime
+          Move-Item "node-runtime/node-v$nodeVersion-win-x64" "node-portable"
+
+      # ── 5. WinDivert 바이너리 다운로드 ──
+      - name: Download WinDivert
+        shell: pwsh
+        run: |
+          $version = "2.2.2"
+          $url = "https://github.com/basil00/WinDivert/releases/download/v$version/WinDivert-$version-A.zip"
+          Invoke-WebRequest -Uri $url -OutFile windivert.zip
+          Expand-Archive windivert.zip -DestinationPath windivert-extract
+
+      # ── 6. 배포 폴더 조립 ──
+      - name: Assemble release folder
+        shell: pwsh
+        run: |
+          $dist = "dist/LGLocalManager"
+          New-Item -ItemType Directory -Force -Path "$dist/runtime/node" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$dist/runtime/rethink" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$dist/config" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$dist/data" | Out-Null
+
+          Copy-Item -Recurse -Force "node-portable/*" "$dist/runtime/node/"
+          Copy-Item -Recurse -Force "rethink-src/dist/*" "$dist/runtime/rethink/dist/"
+          Copy-Item -Recurse -Force "rethink-src/node_modules" "$dist/runtime/rethink/node_modules/"
+
+          $windivertDir = Get-ChildItem -Path "windivert-extract" -Directory | Select-Object -First 1
+          $arch = Join-Path $windivertDir.FullName "amd64"
+          Copy-Item "$arch/WinDivert.dll" "$dist/WinDivert.dll"
+          Copy-Item "$arch/WinDivert64.sys" "$dist/WinDivert64.sys"
+
+          Copy-Item "config/settings.example.json" "$dist/config/settings.example.json"
+          Copy-Item "config/rethink-config.example.json" "$dist/config/rethink-config.example.json"
+          Copy-Item "data/devices.example.json" "$dist/data/devices.example.json"
+          Copy-Item "README.md" "$dist/README.md"
+          Copy-Item "dist/LGLocalManager.exe" "$dist/LGLocalManager.exe"
+
+      - name: Create ZIP archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/LGLocalManager/*" -DestinationPath "LGLocalManager.zip"
+
+      # ── 7. 릴리스 업로드 ──
+      - name: Upload Asset to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          files: LGLocalManager.zip
+          prerelease: ${{ env.PRERELEASE }}
