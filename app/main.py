@@ -14,7 +14,7 @@ from pathlib import Path
 import pystray
 from PIL import Image, ImageDraw
 
-from . import prereq, startup, updater
+from . import prereq, rethink_config, setup_server, startup, updater
 from .device_store import DeviceStore, watch
 from .gui import DeviceWindow
 from .orchestrator import Orchestrator
@@ -109,7 +109,40 @@ def main() -> None:
     )
 
     watch(store, orchestrator.on_devices_changed)
-    orchestrator.start()
+
+    rethink_config_path = app_dir() / "config" / "rethink-config.json"
+    setup_srv: setup_server.SetupServer | None = None
+
+    def start_rethink_and_devices(_icon=None) -> None:
+        nonlocal setup_srv
+        setup_srv = None
+        orchestrator.start()
+        if icon:
+            icon.update_menu()
+            icon.notify("설정이 완료되어 rethink-cloud를 시작합니다.", APP_NAME)
+
+    if rethink_config.is_configured(rethink_config_path):
+        orchestrator.start()
+    else:
+        logger.info(
+            "rethink-config.json이 없거나 MQTT 브로커 주소가 비어 있어, "
+            "최초 설정 웹페이지를 띄웁니다."
+        )
+        setup_srv = setup_server.SetupServer(
+            config_path=rethink_config_path,
+            management_port=store.rethink_ports["management_port"],
+            on_configured=lambda: start_rethink_and_devices(),
+        )
+        setup_srv.start()
+
+        def _open_setup_page():
+            import time
+            import webbrowser
+
+            time.sleep(1)  # 서버가 뜰 시간을 잠깐 준다
+            webbrowser.open(setup_srv.url())
+
+        threading.Thread(target=_open_setup_page, daemon=True).start()
 
     gui_lock = threading.Lock()
     gui_window: DeviceWindow | None = None
@@ -124,8 +157,14 @@ def main() -> None:
     def open_rethink_ui(_icon=None, _item=None):
         import webbrowser
 
-        port = store.rethink_ports["management_port"]
-        webbrowser.open(f"http://127.0.0.1:{port}")
+        if setup_srv is not None:
+            webbrowser.open(setup_srv.url())
+        else:
+            port = store.rethink_ports["management_port"]
+            webbrowser.open(f"http://127.0.0.1:{port}")
+
+    def rethink_ui_label(_item=None) -> str:
+        return "최초 설정 페이지 열기" if setup_srv is not None else "rethink 웹 UI 열기"
 
     def open_log(_icon=None, _item=None):
         import os
@@ -263,7 +302,7 @@ def main() -> None:
 
     menu = pystray.Menu(
         pystray.MenuItem("기기 관리...", open_devices_window, default=True),
-        pystray.MenuItem("rethink 웹 UI 열기", open_rethink_ui),
+        pystray.MenuItem(rethink_ui_label, open_rethink_ui),
         pystray.MenuItem("로그 열기", open_log),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(

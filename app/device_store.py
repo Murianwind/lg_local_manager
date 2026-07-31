@@ -7,8 +7,8 @@ devices.json 을 읽고 쓰는 저장소.
 스키마 예시:
 {
   "rethink": {
-    "https_port": 4433,
-    "mqtts_port": 8884,
+    "https_port": 443,
+    "mqtts_port": 8883,
     "management_port": 44401
   },
   "devices": [
@@ -34,11 +34,14 @@ from typing import Callable
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 IPV4_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
 
-# rethink 자체의 config.json 기본값과 맞춘 것 (mqtts_port가 기기가 실제로 붙는
-# TLS MQTT 포트다 — mqtt_port(1884)는 로컬 디버그용 평문 포트라 우리 용도와 무관).
+# rethink가 기기 네이티브 기대값 그대로(443/8883) 바인딩하도록 맞춘 기본값.
+# 숫자 하나로 주면 rethink는 그 포트로 리스닝도 하고 /route 응답으로 그 포트를
+# 쓰라고 기기에 광고도 한다 — 443/8883 그대로 쓰면 리다이렉트 이후에도 포트가
+# 안 바뀌므로 별도의 포트 재작성이 필요 없어진다. Windows는 특권 포트 바인딩에
+# 별도 권한이 필요 없다(관리자 권한은 ARP/WinDivert 때문에 이미 갖고 있음).
 DEFAULT_RETHINK_PORTS = {
-    "https_port": 4433,
-    "mqtts_port": 8884,
+    "https_port": 443,
+    "mqtts_port": 8883,
     "management_port": 44401,
 }
 

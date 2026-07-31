@@ -1,7 +1,7 @@
 {
   "rethink": {
-    "https_port": 4433,
-    "mqtts_port": 8884,
+    "https_port": 443,
+    "mqtts_port": 8883,
     "management_port": 44401
   },
   "devices": [

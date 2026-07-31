@@ -18,10 +18,12 @@ DNAT를 지원하지 않는 공유기(IPTIME 순정 등)에서도, PC 하나로 
   ARP 스푸핑은 원래 다른 사람의 네트워크에 사용하면 안 되는 기술입니다. 이 프로그램은
   `devices.json`에 명시적으로 등록된 기기만 대상으로 삼도록 만들어져 있지만, 그 등록 자체를
   자신의 소유가 아닌 기기에 대해 하지 마세요.
-- **GPL-2.0 안내**: rethink는 GPL-2.0으로 배포됩니다. 이 프로젝트는 rethink를 수정 없이
-  서브프로세스로 실행할 뿐 소스를 변형해 재배포하지 않지만, 배포 zip에 rethink 빌드 결과물이
-  포함되므로 rethink 자체의 라이선스 조건(소스 공개 의무 등)은 그대로 적용됩니다. `runtime/rethink`
-  안의 rethink 소스/빌드 산출물을 임의로 수정해 재배포할 경우 GPL-2.0을 준수해야 합니다.
+- **GPL-2.0 안내**: rethink는 GPL-2.0으로 배포됩니다. rethink 소스는 `rethink-vendor.zip`에
+  그대로 벤더링(고정)되어 있고(파일 개수가 많아 GitHub 웹 업로드 제한 때문에 zip 하나로
+  묶어둠), 원본 라이선스 전문(`COPYING`)과 출처/커밋 정보(`VENDORED_FROM.md`)도 그 zip
+  안에 함께 들어 있습니다. 이 프로젝트는 rethink를 수정
+  없이 그대로 서브프로세스로 실행할 뿐이지만, 배포 zip에 rethink 빌드 결과물이 포함되므로
+  rethink 자체의 라이선스 조건(소스 공개 의무 등)은 그대로 적용됩니다.
 - 되돌릴 때(기기 삭제/비활성화)는 **rethink 웹 UI에서 해당 기기의 bridge를 먼저 끄고** 나서
   진행하세요. 순서를 지키지 않으면 clientId 충돌로 재접속 루프에 빠질 수 있습니다 — 앱이
   삭제/비활성화 시 이를 트레이 알림으로 안내합니다.
@@ -41,11 +43,24 @@ DNAT를 지원하지 않는 공유기(IPTIME 순정 등)에서도, PC 하나로 
    다운로드 후 압축 해제
 2. Npcap 설치 (아직 안 했다면)
 3. `config/settings.example.json` → `config/settings.json` 으로 복사, 게이트웨이 IP 등 입력
-4. `config/rethink-config.example.json` → `config/rethink-config.json` 으로 복사,
-   [rethink 원본 설정 문서](https://github.com/anszom/rethink/wiki)를 참고해 채우기
-5. `LGLocalManager.exe` 실행 (관리자 권한 요청 창이 뜨면 승인)
+4. `LGLocalManager.exe` 실행 (관리자 권한 요청 창이 뜨면 승인)
+5. **`config/rethink-config.json`이 없으면 자동으로 최초 설정 페이지가 브라우저에 뜹니다**
+   (`http://127.0.0.1:44490/`) — MQTT 브로커 주소만 입력하면 나머지 값(포트, hostname 등)은
+   자동으로 채워지고, 제출하는 즉시 rethink-cloud가 시작됩니다. (스키마는
+   `rethink-vendor.zip` 안의 `config.jsonc` 원본을 그대로 따르며, 우리가 vendor로 고정해둔
+   [PR #107](https://github.com/anszom/rethink/pull/107) 버전의 기능이 포함되어 있습니다.
+   고급 설정이 필요하면 `config/rethink-config.json`을 직접 열어 편집해도 됩니다.)
 6. 트레이 아이콘 우클릭 → **기기 관리** → 이름/MAC/IP 입력 후 추가
 7. 잠시 뒤 트레이 → **rethink 웹 UI 열기** 에서 기기가 올라왔는지 확인 → bridge 활성화
+
+## 최초 설정 웹페이지
+
+`config/rethink-config.json`이 없거나 MQTT 브로커 주소가 비어 있으면, 앱이 자동으로
+`http://127.0.0.1:44490/`에 간단한 설정 페이지를 띄우고 트레이 메뉴의
+**"최초 설정 페이지 열기"**로도 다시 열 수 있습니다. 입력값(MQTT 브로커 주소/포트/계정,
+rethink 호스트 이름)만 받아서 나머지는 안전한 기본값(443/8883 등)으로 채운
+`rethink-config.json`을 만들고, 제출 즉시 rethink-cloud를 시작시킵니다. 설정이 끝나면
+이 페이지는 사라지고, 트레이 메뉴도 정식 rethink 관리 웹 UI로 바뀝니다.
 
 ## Windows 시작 시 자동 실행
 
@@ -92,9 +107,9 @@ GitHub Releases를 조회해 새 버전이 있는지 확인합니다(백그라�
 ```json
 {
   "rethink": {
-    "https_port": 4433,
-    "mqtt_port": 8883,
-    "mgmt_port": 44401
+    "https_port": 443,
+    "mqtts_port": 8883,
+    "management_port": 44401
   },
   "devices": [
     {
@@ -147,11 +162,17 @@ CI(GitHub Actions)가 `git push --tags`로 태그를 올리면 자동으로 빌�
 ```powershell
 pip install -r requirements.txt
 pyinstaller build.spec
-# 이후 rethink/node 런타임은 .github/workflows/build.yml 의 단계를 참고해 수동으로 채워 넣어야 함
+Expand-Archive -Path rethink-vendor.zip -DestinationPath .
+cd rethink-vendor
+npm ci
+npm run build
+cd ..
+# 이후 포터블 Node/WinDivert 배치는 .github/workflows/build.yml 의 단계를 참고해 수동으로 채워 넣어야 함
 ```
 
 ## 라이선스
 
 이 저장소(LGLocalManager)의 코드는 각자 원하는 라이선스를 선택하세요(기본값 없음).
-번들되는 rethink는 GPL-2.0이며, 원본 저작권은 [anszom](https://github.com/anszom/rethink)에게
-있습니다.
+`rethink-vendor.zip`에 벤더링된 rethink는 GPL-2.0이며, 원본 저작권은
+[anszom](https://github.com/anszom/rethink)에게 있습니다. 출처와 정확한 커밋은
+그 zip 안의 `VENDORED_FROM.md`를 참고하세요.
