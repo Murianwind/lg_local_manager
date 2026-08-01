@@ -81,6 +81,16 @@ class RethinkProcess:
         if openssl_dir:
             env["PATH"] = str(openssl_dir) + os.pathsep + env.get("PATH", "")
             logger.info("openssl 경로를 PATH에 추가: %s", openssl_dir)
+            cnf = prereq.openssl_cnf_path(openssl_dir)
+            if cnf:
+                env["OPENSSL_CONF"] = str(cnf)
+                logger.info("OPENSSL_CONF 설정: %s", cnf)
+            else:
+                logger.warning(
+                    "openssl.cnf를 찾지 못했습니다 (%s/../ssl/openssl.cnf 없음) — "
+                    "openssl이 설정 파일을 못 찾아 실패할 수 있습니다.",
+                    openssl_dir,
+                )
         else:
             logger.warning(
                 "openssl.exe를 찾지 못했습니다 — rethink-cloud의 인증서 발급이 "

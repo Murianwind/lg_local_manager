@@ -55,8 +55,11 @@ def windivert_files_present(app_dir: Path) -> bool:
 NPCAP_DOWNLOAD_URL = "https://npcap.com/#download"
 
 # rethink-cloud는 인증서 발급을 openssl 커맨드로 직접 처리한다. Windows엔 기본
-# 내장이 없어서, 앱 배포 zip에 Git for Windows의 usr/bin(openssl.exe 포함)을
+# 내장이 없어서, 앱 배포 zip에 Git for Windows의 usr/(bin+ssl)을
 # runtime/openssl/ 로 번들해뒀다 — 1순위는 그 번들, 그다음은 시스템에 이미 있는 것.
+# bin/ssl을 형제 폴더로 유지해야 openssl.exe가 자기 설정 파일(openssl.cnf)을
+# 상대 경로로 찾을 수 있다 (find_openssl_dir이 반환하는 건 항상 "bin" 폴더고,
+# 설정 파일은 그 옆의 "ssl" 폴더에 있다고 가정한다 — openssl_cnf_path() 참고).
 _OPENSSL_CANDIDATE_DIRS = [
     r"C:\Program Files\Git\usr\bin",
     r"C:\Program Files (x86)\Git\usr\bin",
@@ -64,11 +67,11 @@ _OPENSSL_CANDIDATE_DIRS = [
 
 
 def find_openssl_dir(app_dir: Path | None = None) -> Path | None:
-    """openssl.exe가 있는 폴더를 찾는다. 번들 → PATH → 시스템 Git 순으로 본다."""
+    """openssl.exe가 있는 "bin" 폴더를 찾는다. 번들 → PATH → 시스템 Git 순으로 본다."""
     import shutil
 
     if app_dir is not None:
-        bundled = app_dir / "runtime" / "openssl" / "openssl.exe"
+        bundled = app_dir / "runtime" / "openssl" / "bin" / "openssl.exe"
         if bundled.exists():
             return bundled.parent
 
@@ -81,6 +84,12 @@ def find_openssl_dir(app_dir: Path | None = None) -> Path | None:
         if exe.exists():
             return exe.parent
     return None
+
+
+def openssl_cnf_path(openssl_bin_dir: Path) -> Path | None:
+    """openssl.exe와 형제 관계인 ssl/openssl.cnf 경로를 찾는다. 없으면 None."""
+    candidate = openssl_bin_dir.parent / "ssl" / "openssl.cnf"
+    return candidate if candidate.exists() else None
 
 
 def check_all(app_dir: Path) -> list[str]:
@@ -101,8 +110,8 @@ def check_all(app_dir: Path) -> list[str]:
     if find_openssl_dir(app_dir) is None:
         problems.append(
             "openssl.exe를 찾지 못했습니다. rethink-cloud가 인증서를 발급하지 못해 "
-            "시작에 실패합니다. release 패키지가 손상되었을 수 있습니다 (runtime/openssl/ "
-            "폴더 확인 필요) — 또는 Git for Windows(https://git-scm.com/download/win)를 "
-            "설치하면 자동으로 인식합니다."
+            "시작에 실패합니다. release 패키지가 손상되었을 수 있습니다 "
+            "(runtime/openssl/bin/ 폴더 확인 필요) — 또는 Git for "
+            "Windows(https://git-scm.com/download/win)를 설치하면 자동으로 인식합니다."
         )
     return problems
