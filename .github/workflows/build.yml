@@ -114,7 +114,21 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile windivert.zip
           Expand-Archive windivert.zip -DestinationPath windivert-extract
 
-      # ── 6. 배포 폴더 조립 (Full 패키지) ──
+      # ── 5-1. Portable Git 다운로드 (openssl.exe 번들용) ──
+      # openssl/openssl 자체는 Windows 바이너리를 배포하지 않는다("source only").
+      # Git for Windows는 openssl.exe를 usr/bin에 항상 포함해서 배포하고, GitHub
+      # Releases에 안정적인 버전 태그로 올라오므로 이걸 그대로 가져다 쓴다.
+      - name: Download Portable Git (for openssl.exe)
+        shell: pwsh
+        run: |
+          $gitTag = "v2.55.0.windows.3"
+          $gitVer = "2.55.0.3"
+          $url = "https://github.com/git-for-windows/git/releases/download/$gitTag/PortableGit-$gitVer-64-bit.7z.exe"
+          Invoke-WebRequest -Uri $url -OutFile PortableGit.7z.exe
+          # 자체 해제형(7z SFX) 실행 파일이라 -y(무인)/-o(대상 폴더) 옵션으로 조용히 풀린다.
+          Start-Process -FilePath ".\PortableGit.7z.exe" -ArgumentList "-y", "-oportablegit" -Wait
+
+
       - name: Assemble release folder
         shell: pwsh
         run: |
@@ -134,6 +148,9 @@ jobs:
           Copy-Item "$arch/WinDivert.dll" "$dist/WinDivert.dll"
           Copy-Item "$arch/WinDivert64.sys" "$dist/WinDivert64.sys"
 
+          New-Item -ItemType Directory -Force -Path "$dist/runtime/openssl" | Out-Null
+          Copy-Item -Recurse -Force "portablegit/usr/bin/*" "$dist/runtime/openssl/"
+
           Copy-Item "config/settings.example.json" "$dist/config/settings.example.json"
           Copy-Item "config/rethink-config.example.json" "$dist/config/rethink-config.example.json"
           Copy-Item "data/devices.example.json" "$dist/data/devices.example.json"
@@ -148,6 +165,7 @@ jobs:
           $manifest = @{
             node_version = "20.15.1"
             windivert_version = "2.2.2"
+            portable_git_version = "2.55.0.3"
             rethink_commit = $rethinkCommit
           }
           $manifest | ConvertTo-Json | Set-Content -Path "runtime-manifest.json" -Encoding utf8
