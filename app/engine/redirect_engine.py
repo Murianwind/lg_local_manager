@@ -49,13 +49,13 @@ class RedirectWorker:
         self._handle = None
 
     def _filter(self) -> str:
-        # ARP 스푸핑으로 이 기기가 보낸 패킷은 "이 PC로 들어오는"(inbound) 방향으로
-        # 도착한다. outbound로 잡으면 이 PC가 직접 내보내는 패킷만 걸려서, 정작
-        # 리다이렉트하려는 기기의 트래픽 자체를 못 잡는다.
+        # 진단을 위해 일부러 방향(inbound/outbound) 제한을 뺐다 — ARP 스푸핑이
+        # 실제로 패킷을 이 PC로 끌어오고 있는지, 방향이 우리가 가정한 대로인지
+        # 자체가 아직 확인 안 됐기 때문이다. _run()에서 잡히는 패킷마다 방향을
+        # 로그로 남기고, 그 결과를 보고 나중에 정확한 방향으로 좁힌다.
         return (
             f"ip.SrcAddr == {self.device_ip} and tcp and "
-            f"(tcp.DstPort == {LG_HTTPS_PORT} or tcp.DstPort == {LG_MQTTS_PORT}) "
-            "and inbound"
+            f"(tcp.DstPort == {LG_HTTPS_PORT} or tcp.DstPort == {LG_MQTTS_PORT})"
         )
 
     def start(self) -> None:
@@ -86,15 +86,40 @@ class RedirectWorker:
         try:
             with pydivert.WinDivert(self._filter()) as w:
                 self._handle = w
+                logger.info(
+                    "WinDivert 필터 활성화 (%s): %s", self.device_ip, self._filter()
+                )
+                packet_count = 0
                 for packet in w:
                     if self._stop_event.is_set():
                         break
+                    packet_count += 1
+                    original_dst = packet.dst_addr
+                    original_port = packet.tcp.dst_port
                     if packet.tcp.dst_port == LG_HTTPS_PORT:
                         packet.dst_addr = self.rethink_host
                         packet.tcp.dst_port = self.https_port
                     elif packet.tcp.dst_port == LG_MQTTS_PORT:
                         packet.dst_addr = self.rethink_host
                         packet.tcp.dst_port = self.mqtts_port
+                    # 처음 20개는 상세히 남긴다 — 이걸로 (1) ARP 스푸핑이 실제로
+                    # 패킷을 끌어오고 있는지, (2) 실측 방향(is_outbound)이
+                    # 뭔지, (3) 재작성이 실제로 일어났는지를 확인한다. 그 이후는
+                    # 로그가 넘치지 않게 조용히 처리만 한다.
+                    if packet_count <= 20:
+                        logger.info(
+                            "패킷 캡처 #%d (%s): outbound=%s %s:%s -> %s:%s "
+                            "(재작성 후 -> %s:%s)",
+                            packet_count,
+                            self.device_ip,
+                            packet.is_outbound,
+                            packet.src_addr,
+                            packet.tcp.src_port,
+                            original_dst,
+                            original_port,
+                            packet.dst_addr,
+                            packet.tcp.dst_port,
+                        )
                     w.send(packet)
         except Exception as e:  # noqa: BLE001
             logger.error("리다이렉트 워커 오류 (%s): %s", self.device_ip, e)
