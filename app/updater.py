@@ -337,13 +337,17 @@ def _launch_script(script_content: str, app_dir: Path) -> None:
         subprocess.Popen(
             [
                 "powershell",
-                "-WindowStyle", "Hidden",
                 "-ExecutionPolicy", "Bypass",
                 "-File", str(script_path),
             ],
             stdout=stderr_file,
             stderr=subprocess.STDOUT,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            # 이전엔 DETACHED_PROCESS(콘솔 자체가 없음) + "-WindowStyle Hidden"
+            # (콘솔 창을 숨겨라)를 같이 썼는데, 존재하지도 않는 창을 숨기라고
+            # 시키니 PowerShell이 시작 단계에서 조용히 죽어버렸다 — 로그를
+            # 한 줄도 못 남기고 사라진 원인이 이거였다. CREATE_NO_WINDOW는
+            # "애초에 콘솔 창을 안 만드는" 방식이라 이 충돌이 없다.
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
         )
 
 
