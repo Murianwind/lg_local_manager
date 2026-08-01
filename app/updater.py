@@ -280,6 +280,7 @@ try {{
 }} catch {{
     Log "FATAL: $_"
 }}
+Remove-Item -Force $PSCommandPath -ErrorAction SilentlyContinue
 '''
 
 _FULL_SWAP_SCRIPT = r'''
@@ -339,6 +340,7 @@ try {{
 }} catch {{
     Log "FATAL: $_"
 }}
+Remove-Item -Force $PSCommandPath -ErrorAction SilentlyContinue
 '''
 
 
