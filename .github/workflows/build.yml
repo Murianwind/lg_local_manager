@@ -37,15 +37,16 @@ jobs:
         shell: pwsh
         run: |
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            # [수동 실행] 타임스탬프 태그 생성 / 버전 업데이트 안 함 / 프리 릴리스
-            $kst = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Date), "Korea Standard Time")
+            # [수동 실행] 타임스탬프 태그 생성 / 이 빌드에만 버전 반영(레포에는 커밋 안 함) / 프리 릴리스
             $tag = "v" + (Get-Date -Format "yyyyMMdd-HHmmss")
+            $cleanVer = $tag.TrimStart('v')
             echo "TAG_NAME=$tag" >> $env:GITHUB_ENV
+            echo "CLEAN_VERSION=$cleanVer" >> $env:GITHUB_ENV
             echo "SHOULD_UPDATE_VERSION=false" >> $env:GITHUB_ENV
             echo "PRERELEASE=true" >> $env:GITHUB_ENV
-            echo "Mode: Manual (No version update, Pre-release)"
+            echo "Mode: Manual (version stamped for this build only, Pre-release)"
           } else {
-            # [릴리스 발행] 태그 사용 / 버전 업데이트 수행 / 정식 릴리스
+            # [릴리스 발행] 태그 사용 / 버전 업데이트를 레포에도 커밋 / 정식 릴리스
             $tag = "${{ github.event.release.tag_name }}"
             $cleanVer = $tag.TrimStart('v')
             echo "TAG_NAME=$tag" >> $env:GITHUB_ENV
@@ -55,17 +56,21 @@ jobs:
             echo "Mode: Release (Version update to $cleanVer, Official)"
           }
 
-      # ── 2. 소스 코드 내 APP_VERSION 수정 (릴리스 발행 시에만 실행) ──
+      # ── 2. 소스 코드 내 APP_VERSION 수정 (수동/릴리스 둘 다 실행) ──
+      # 이전엔 릴리스 때만 이 스텝을 돌려서, Beta(수동 빌드)로 설치한 앱은 자기
+      # 버전을 영원히 예전 값(예: "0.0.0")으로만 알고 있었다 — 그래서 업데이트를
+      # 실제로 설치해도 대시보드가 "새 버전이 있다"고 계속 떴다. 이 스텝 자체는
+      # 항상 돌리되(빌드되는 exe에는 항상 정확한 버전이 찍히게), 그 변경을
+      # 저장소에 커밋할지 말지만 SHOULD_UPDATE_VERSION으로 구분한다(아래 2-1).
       - name: Update APP_VERSION in Python Script
-        if: env.SHOULD_UPDATE_VERSION == 'true'
         shell: pwsh
         run: |
           $filePath = "app/version.py"
           $newVersion = "${{ env.CLEAN_VERSION }}"
           (Get-Content $filePath) -replace 'APP_VERSION = ".*"', "APP_VERSION = `"$newVersion`"" | Set-Content $filePath
-          echo "Updated APP_VERSION to $newVersion"
+          echo "Updated APP_VERSION to $newVersion (commit to repo: ${{ env.SHOULD_UPDATE_VERSION }})"
 
-      # ── 2-1. 변경된 소스 코드를 저장소로 다시 Push ──
+      # ── 2-1. 변경된 소스 코드를 저장소로 다시 Push (정식 릴리스일 때만) ──
       - name: Commit and Push Version Change
         if: env.SHOULD_UPDATE_VERSION == 'true'
         shell: pwsh
