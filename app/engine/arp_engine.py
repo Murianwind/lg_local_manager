@@ -24,6 +24,7 @@ from typing import Callable
 logger = logging.getLogger("arp_engine")
 
 try:
+    import scapy  # type: ignore
     from scapy.all import (  # type: ignore
         ARP,
         AsyncSniffer,
@@ -33,6 +34,12 @@ try:
         get_if_hwaddr,
         send,
         srp,
+    )
+
+    logger.info(
+        "scapy 버전: %s / AsyncSniffer 사용 가능: %s",
+        getattr(scapy, "VERSION", "알 수 없음"),
+        AsyncSniffer is not None,
     )
 except ImportError:  # scapy/Npcap 미설치 환경에서도 이 모듈만은 import 가능하게
     ARP = Ether = conf = AsyncSniffer = None  # type: ignore
@@ -141,6 +148,11 @@ class ArpSpoofWorker:
 
     def _start_active_reply_sniffer(self) -> None:
         if AsyncSniffer is None:
+            logger.warning(
+                "AsyncSniffer를 사용할 수 없습니다 (%s) — scapy 버전이 이를 지원하지 "
+                "않을 수 있습니다. ARP 요청 실시간 응답 없이 주기적 광고만 동작합니다.",
+                self.target.name,
+            )
             return
         try:
             self._sniffer = AsyncSniffer(
