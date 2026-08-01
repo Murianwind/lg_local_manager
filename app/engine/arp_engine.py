@@ -24,11 +24,14 @@ from typing import Callable
 logger = logging.getLogger("arp_engine")
 
 try:
-    from scapy.all import ARP, Ether, conf, get_if_hwaddr, send, srp  # type: ignore
+    from scapy.all import ARP, Ether, conf, get_if_addr, get_if_hwaddr, send, srp  # type: ignore
 except ImportError:  # scapy/Npcap 미설치 환경에서도 이 모듈만은 import 가능하게
     ARP = Ether = conf = None  # type: ignore
 
     def get_if_hwaddr(*_a, **_k):  # type: ignore
+        raise RuntimeError("scapy가 설치되어 있지 않습니다.")
+
+    def get_if_addr(*_a, **_k):  # type: ignore
         raise RuntimeError("scapy가 설치되어 있지 않습니다.")
 
     def send(*_a, **_k):  # type: ignore
@@ -119,6 +122,24 @@ class ArpSpoofWorker:
                 f"설치되어 있는지, 게이트웨이 IP({self.gateway_ip})가 맞는지 확인해주세요."
             )
             return False
+
+        # scapy가 여러 네트워크 어댑터(Docker/VPN 가상 어댑터 포함) 중 어떤 걸
+        # 기본으로 골랐는지 확인한다. 실제 공유기가 있는 네트워크와 다른
+        # 어댑터를 고르면, ARP 전송 자체는 에러 없이 "성공"하지만 패킷이
+        # 엉뚱한 곳으로 나가서 기기가 영영 못 받는다 — 이게 그 경우인지
+        # 로그로 바로 판단할 수 있게 남긴다.
+        try:
+            iface_ip = get_if_addr(conf.iface)
+            logger.info(
+                "scapy가 선택한 네트워크 어댑터 (%s): %s (IP: %s) — 게이트웨이(%s)와 "
+                "같은 대역이 아니면 어댑터가 잘못 선택된 것입니다.",
+                self.target.name,
+                conf.iface,
+                iface_ip,
+                self.gateway_ip,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("네트워크 어댑터 정보 확인 실패 (%s): %s", self.target.name, e)
 
         return True
 

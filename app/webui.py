@@ -289,7 +289,8 @@ def _dashboard_html(context: WebUIContext, error: str = "") -> str:
   <form method="POST" action="/update/check">
     <button type="submit" class="secondary">지금 확인</button>
   </form>
-  <p class="hint"><a href="/api/update-log" target="_blank">업데이트 적용 로그 보기</a>
+  <p class="hint"><a href="/api/update-log" target="_blank">업데이트 적용 로그 보기</a> ·
+  <a href="/api/update-stderr" target="_blank">교체 스크립트 원본 출력 보기</a>
   (설치 후 프로그램이 안 돌아오면 여기서 원인 확인 — 별도 창에서 열립니다)</p>
 
   <h2>시작 옵션</h2>
@@ -444,6 +445,15 @@ def _make_handler(context: WebUIContext):
             if self.path == "/api/update-log":
                 update_log_path = context.app_dir / "data" / "update-apply.log"
                 body = "\n".join(_tail_log_lines(update_log_path)).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/api/update-stderr":
+                stderr_path = context.app_dir / "data" / "update-apply-stderr.log"
+                body = "\n".join(_tail_log_lines(stderr_path)).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))

@@ -122,7 +122,17 @@ class RedirectWorker:
                         )
                     w.send(packet)
         except Exception as e:  # noqa: BLE001
-            logger.error("리다이렉트 워커 오류 (%s): %s", self.device_ip, e)
+            if self._stop_event.is_set():
+                # stop()이 블로킹 중인 for-loop을 깨우려고 일부러 핸들을
+                # 닫아서 생기는 예외다 — 종료 과정의 정상적인 일부라
+                # ERROR가 아니라 INFO로 남긴다.
+                logger.info(
+                    "리다이렉트 워커 종료 (%s): 정상 종료에 따른 handle 닫힘 (%s)",
+                    self.device_ip,
+                    e,
+                )
+            else:
+                logger.error("리다이렉트 워커 오류 (%s): %s", self.device_ip, e)
 
 
 class RedirectEngine:

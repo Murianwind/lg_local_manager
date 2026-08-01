@@ -318,18 +318,33 @@ try {{
 '''
 
 
-def _launch_script(script_content: str) -> None:
+def _launch_script(script_content: str, app_dir: Path) -> None:
     script_path = Path(tempfile.gettempdir()) / f"lglocalmanager_apply_{os.getpid()}.ps1"
     script_path.write_text(script_content, encoding="utf-8")
-    subprocess.Popen(
-        [
-            "powershell",
-            "-WindowStyle", "Hidden",
-            "-ExecutionPolicy", "Bypass",
-            "-File", str(script_path),
-        ],
-        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-    )
+
+    # 스크립트 자신이 남기는 로그(update-apply.log)는 스크립트가 최소한
+    # 시작은 해야 의미가 있다 — 파싱 자체가 실패하면(예: 이스케이프 실수로
+    # PowerShell 문법이 깨짐) 아무것도 안 남는다. 그래서 여기서 Python이
+    # PowerShell 프로세스의 stdout/stderr를 직접 파일로 강제 리다이렉트해서,
+    # 스크립트가 시작도 못 하고 죽는 경우까지 잡아낸다.
+    stderr_path = app_dir / "data" / "update-apply-stderr.log"
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info("교체 스크립트 파일: %s", script_path)
+    logger.info("교체 스크립트 stdout/stderr 로그: %s", stderr_path)
+
+    with open(stderr_path, "w", encoding="utf-8") as stderr_file:
+        subprocess.Popen(
+            [
+                "powershell",
+                "-WindowStyle", "Hidden",
+                "-ExecutionPolicy", "Bypass",
+                "-File", str(script_path),
+            ],
+            stdout=stderr_file,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
 
 
 def _download_and_extract(url: str, timeout: float = 120.0) -> tuple[Path, Path]:
@@ -383,7 +398,7 @@ def _apply_light_update(info: UpdateInfo, app_dir: Path) -> None:
         tmp_dir=str(tmp_dir),
         log_file=str(log_file),
     )
-    _launch_script(script)
+    _launch_script(script, app_dir)
 
 
 def _apply_full_update(info: UpdateInfo, app_dir: Path) -> None:
@@ -405,7 +420,7 @@ def _apply_full_update(info: UpdateInfo, app_dir: Path) -> None:
         preserve_list=preserve_list,
         log_file=str(log_file),
     )
-    _launch_script(script)
+    _launch_script(script, app_dir)
 
 
 def apply_update(info: UpdateInfo, app_dir: Path, on_before_exit=None) -> None:
