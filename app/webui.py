@@ -305,13 +305,20 @@ def _dashboard_html(context: WebUIContext, error: str = "") -> str:
       <option value="[WARNING]">WARNING</option>
       <option value="[INFO]">INFO</option>
     </select>
+    <button type="button" class="secondary" id="log-pause-btn">일시정지</button>
+    <button type="button" class="secondary" id="log-copy-btn">로그 복사</button>
+    <span id="log-copy-result" class="hint"></span>
     <span class="hint">최신 로그가 맨 위에 표시됩니다. 2초마다 자동 갱신됩니다.</span>
   </div>
   <pre class="log" id="log-view">불러오는 중...</pre>
   <script>
     const logView = document.getElementById('log-view');
     const levelFilter = document.getElementById('log-level-filter');
+    const pauseBtn = document.getElementById('log-pause-btn');
+    const copyBtn = document.getElementById('log-copy-btn');
+    const copyResult = document.getElementById('log-copy-result');
     let latestLines = [];
+    let paused = false;
 
     function renderLog() {{
       const wanted = levelFilter.value;
@@ -320,6 +327,7 @@ def _dashboard_html(context: WebUIContext, error: str = "") -> str:
     }}
 
     async function pollLog() {{
+      if (paused) return;
       try {{
         const resp = await fetch('/api/log');
         const data = await resp.json();
@@ -330,11 +338,25 @@ def _dashboard_html(context: WebUIContext, error: str = "") -> str:
       }}
     }}
 
+    pauseBtn.addEventListener('click', () => {{
+      paused = !paused;
+      pauseBtn.textContent = paused ? '재개' : '일시정지';
+    }});
+
+    copyBtn.addEventListener('click', async () => {{
+      try {{
+        await navigator.clipboard.writeText(logView.textContent);
+        copyResult.textContent = '복사됨!';
+      }} catch (e) {{
+        copyResult.textContent = '복사 실패: ' + e;
+      }}
+      setTimeout(() => {{ copyResult.textContent = ''; }}, 2000);
+    }});
+
     levelFilter.addEventListener('change', renderLog);
     pollLog();
     setInterval(pollLog, 2000);
   </script>
-  <p><a href="/">전체 새로고침</a></p>
 </body></html>"""
 
 
