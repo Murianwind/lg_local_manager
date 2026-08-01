@@ -1,0 +1,16 @@
+{
+  "rethink": {
+    "https_port": 443,
+    "mqtts_port": 8883,
+    "management_port": 44401
+  },
+  "devices": [
+    {
+      "name": "거실 에어컨",
+      "mac": "AA:BB:CC:11:22:33",
+      "ip": "192.168.0.101",
+      "enabled": false,
+      "rethink_device_id": ""
+    }
+  ]
+}
