@@ -148,8 +148,10 @@ jobs:
           Copy-Item "$arch/WinDivert.dll" "$dist/WinDivert.dll"
           Copy-Item "$arch/WinDivert64.sys" "$dist/WinDivert64.sys"
 
-          New-Item -ItemType Directory -Force -Path "$dist/runtime/openssl" | Out-Null
-          Copy-Item -Recurse -Force "portablegit/usr/bin/*" "$dist/runtime/openssl/"
+          New-Item -ItemType Directory -Force -Path "$dist/runtime/openssl/bin" | Out-Null
+          Copy-Item -Recurse -Force "portablegit/usr/bin/*" "$dist/runtime/openssl/bin/"
+          New-Item -ItemType Directory -Force -Path "$dist/runtime/openssl/ssl" | Out-Null
+          Copy-Item -Recurse -Force "portablegit/usr/ssl/*" "$dist/runtime/openssl/ssl/"
 
           Copy-Item "config/settings.example.json" "$dist/config/settings.example.json"
           Copy-Item "config/rethink-config.example.json" "$dist/config/rethink-config.example.json"
