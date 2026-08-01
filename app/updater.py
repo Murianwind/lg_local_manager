@@ -202,9 +202,20 @@ def check_for_update(
 def _download(url: str, dest: Path, timeout: float = 120.0) -> None:
     with requests.get(url, stream=True, timeout=timeout) as r:
         r.raise_for_status()
+        expected_size = r.headers.get("Content-Length")
+        written = 0
         with open(dest, "wb") as f:
             for chunk in r.iter_content(chunk_size=1 << 16):
                 f.write(chunk)
+                written += len(chunk)
+
+    # 다운로드가 중간에 끊겼는데도 조용히 "성공"으로 넘어가면, 그 잘린 zip이
+    # 손상된 exe를 만들어내는 원인이 될 수 있다 — 여기서 미리 잡아낸다.
+    if expected_size is not None and written != int(expected_size):
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"다운로드가 불완전합니다: {written} / {expected_size} 바이트만 받음 ({url})"
+        )
 
 
 _LIGHT_SWAP_SCRIPT = r'''
@@ -230,14 +241,26 @@ try {{
 
     # 프로세스가 막 종료된 직후엔 OS/백신이 exe 파일을 잠깐 더 붙잡고 있을 수
     # 있어서, 한 번 실패해도 바로 포기하지 않고 몇 초간 재시도한다.
+    #
+    # 기존 파일에 바로 덮어쓰지 않고 .new 임시 이름으로 먼저 전부 복사한 뒤,
+    # 크기까지 맞는 걸 확인하고 나서야 진짜 파일 이름으로 바꿔치기한다 —
+    # 복사 도중에 뭔가 끼어들어도(백신 스캔 등) 기존 exe는 안전하게 남아있고,
+    # "절반만 써진 exe"가 실제 파일명으로 남는 사고를 막는다.
+    $stagingExe = "$targetExe.new"
     $copied = $false
     for ($i = 0; $i -lt 10; $i++) {{
         try {{
-            Copy-Item -Force $newExe $targetExe
+            Copy-Item -Force $newExe $stagingExe
+            $sourceSize = (Get-Item $newExe).Length
+            $stagedSize = (Get-Item $stagingExe).Length
+            if ($sourceSize -ne $stagedSize) {{
+                throw "size mismatch: source=$sourceSize staged=$stagedSize"
+            }}
             $copied = $true
             break
         }} catch {{
             Log "copy attempt $i failed: $_"
+            Remove-Item -Force $stagingExe -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 1
         }}
     }}
@@ -245,6 +268,7 @@ try {{
         Log "ERROR: could not replace exe after retries, giving up"
         exit 1
     }}
+    Move-Item -Force $stagingExe $targetExe
     Log "exe replaced"
 
     Start-Process -FilePath $targetExe
