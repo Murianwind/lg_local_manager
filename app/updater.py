@@ -271,8 +271,8 @@ try {{
     Move-Item -Force $stagingExe $targetExe
     Log "exe replaced"
 
-    Start-Process -FilePath $targetExe
-    Log "relaunched: $targetExe"
+    Start-Process -FilePath $targetExe -ArgumentList "--from-auto-update"
+    Log "relaunched: $targetExe --from-auto-update"
 
     Start-Sleep -Seconds 2
     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
@@ -330,8 +330,8 @@ try {{
     }}
     Log "files replaced"
 
-    Start-Process -FilePath (Join-Path $targetDir $exeName)
-    Log "relaunched: $(Join-Path $targetDir $exeName)"
+    Start-Process -FilePath (Join-Path $targetDir $exeName) -ArgumentList "--from-auto-update"
+    Log "relaunched: $(Join-Path $targetDir $exeName) --from-auto-update"
 
     Start-Sleep -Seconds 2
     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue

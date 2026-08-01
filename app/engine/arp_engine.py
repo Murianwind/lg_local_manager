@@ -91,6 +91,7 @@ class ArpSpoofWorker:
         self._my_mac: str | None = None
         self._gateway_mac: str | None = None
         self._sniffer: AsyncSniffer | None = None  # type: ignore[valid-type]
+        self._arp_seen_count = 0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -121,6 +122,20 @@ class ArpSpoofWorker:
         이 방식이 정석적인 ARP 스푸핑 구현이고, 하드닝된 기기에도 통한다.
         """
         try:
+            # 처음 몇 개는 매칭 여부와 무관하게 무조건 남긴다 — 감시 자체가
+            # 아무 트래픽도 못 보고 있는 건지, 트래픽은 보는데 우리 기기/
+            # 게이트웨이 조합만 못 찾는 건지 구분하기 위함이다.
+            self._arp_seen_count = getattr(self, "_arp_seen_count", 0) + 1
+            if self._arp_seen_count <= 10:
+                logger.info(
+                    "ARP 패킷 목격 #%d (%s): op=%s psrc=%s pdst=%s",
+                    self._arp_seen_count,
+                    self.target.name,
+                    packet.op,
+                    packet.psrc,
+                    packet.pdst,
+                )
+
             if packet.op != 1:  # who-has 요청만 상대한다
                 return
             if packet.pdst == self.gateway_ip and packet.psrc == self.target.ip:
@@ -155,11 +170,18 @@ class ArpSpoofWorker:
             )
             return
         try:
+            # iface를 명시하지 않으면 scapy가 send()와 다른 기본 어댑터를 고를
+            # 수 있다 — 어댑터 진단 로그로 확인해둔 것과 반드시 같은 인터페이스를
+            # 감시하도록 명시적으로 고정한다.
             self._sniffer = AsyncSniffer(
-                filter="arp", prn=self._on_arp_packet, store=False
+                iface=conf.iface, filter="arp", prn=self._on_arp_packet, store=False
             )
             self._sniffer.start()
-            logger.info("ARP 요청 실시간 감시 시작: %s", self.target.name)
+            logger.info(
+                "ARP 요청 실시간 감시 시작: %s (인터페이스: %s)",
+                self.target.name,
+                conf.iface,
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("ARP 요청 실시간 감시 시작 실패 (%s): %s", self.target.name, e)
             self._sniffer = None

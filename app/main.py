@@ -80,6 +80,13 @@ def main() -> None:
     setup_logging(log_path)
     logger = logging.getLogger("main")
 
+    # 교체 스크립트가 재실행할 때 이 표시를 붙여서 새로 띄운다. 로그만 봐서는
+    # "자동 업데이트로 재시작된 것"과 "사용자가 직접 다시 실행한 것"을 구분할
+    # 방법이 없었는데, 그것 때문에 실제로 자동 재시작이 안 되고 있었던 걸
+    # "됐다"고 잘못 판단한 적이 있었다 — 그래서 명확하게 남긴다.
+    if "--from-auto-update" in sys.argv:
+        logger.info("자동 업데이트 스크립트에 의해 재시작되었습니다.")
+
     if not prereq.is_admin():
         logger.warning("관리자 권한이 아닙니다. 재실행합니다.")
         prereq.relaunch_as_admin()
