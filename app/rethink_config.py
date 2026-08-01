@@ -69,7 +69,10 @@ def build_config(values: RethinkSetupInput) -> dict:
         "thinq1_port": 47878,
         "management_port": 44401,
         "bridge": {"storage_path": "./state"},
-        "log": ["status", "incoming", "HTTPS", "publish", "MGMT"],
+        # "MGMT"는 rethink 자체 관리 웹 UI(대시보드 등)를 볼 때마다
+        # GET /, /panel.js, /ws 같은 접속 로그를 계속 남겨서 일부러 뺐다 —
+        # 기기 연결 진단에 필요한 status/incoming/HTTPS/publish만 남긴다.
+        "log": ["status", "incoming", "HTTPS", "publish"],
     }
 
 

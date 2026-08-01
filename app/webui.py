@@ -122,14 +122,14 @@ class WebUIContext:
     log_path: Path
 
 
-def _tail_log(path: Path, max_lines: int = 150) -> str:
+def _tail_log_lines(path: Path, max_lines: int = 300) -> list[str]:
     if not path.exists():
-        return "(로그 파일이 아직 없습니다)"
+        return ["(로그 파일이 아직 없습니다)"]
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        return "\n".join(lines[-max_lines:])
+        return lines[-max_lines:]
     except OSError as e:
-        return f"(로그를 읽는 중 오류: {e})"
+        return [f"(로그를 읽는 중 오류: {e})"]
 
 
 def _setup_form_html(error: str = "", submitted_values: dict | None = None) -> str:
@@ -296,9 +296,45 @@ def _dashboard_html(context: WebUIContext, error: str = "") -> str:
       onchange="this.form.submit()"> Windows 시작 시 자동 실행</label>
   </form>
 
-  <h2>로그 (최근 150줄)</h2>
-  <pre class="log">{html.escape(_tail_log(context.log_path))}</pre>
-  <p><a href="/">새로고침</a></p>
+  <h2>로그 (최근 300줄, 실시간)</h2>
+  <div class="row">
+    <label>필터:</label>
+    <select id="log-level-filter">
+      <option value="">전체</option>
+      <option value="[ERROR]">ERROR</option>
+      <option value="[WARNING]">WARNING</option>
+      <option value="[INFO]">INFO</option>
+    </select>
+    <span class="hint">최신 로그가 맨 위에 표시됩니다. 2초마다 자동 갱신됩니다.</span>
+  </div>
+  <pre class="log" id="log-view">불러오는 중...</pre>
+  <script>
+    const logView = document.getElementById('log-view');
+    const levelFilter = document.getElementById('log-level-filter');
+    let latestLines = [];
+
+    function renderLog() {{
+      const wanted = levelFilter.value;
+      const filtered = wanted ? latestLines.filter(line => line.includes(wanted)) : latestLines;
+      logView.textContent = filtered.slice().reverse().join('\\n');
+    }}
+
+    async function pollLog() {{
+      try {{
+        const resp = await fetch('/api/log');
+        const data = await resp.json();
+        latestLines = data.lines;
+        renderLog();
+      }} catch (e) {{
+        // 폴링 실패는 조용히 무시하고 다음 주기에 재시도한다.
+      }}
+    }}
+
+    levelFilter.addEventListener('change', renderLog);
+    pollLog();
+    setInterval(pollLog, 2000);
+  </script>
+  <p><a href="/">전체 새로고침</a></p>
 </body></html>"""
 
 
@@ -340,6 +376,8 @@ def _make_handler(context: WebUIContext):
         }
 
         def log_message(self, fmt, *args):  # noqa: A003
+            if self.path == "/api/log":
+                return  # 2초마다 폴링되는 요청이라 로그에 남기면 로그가 로그를 낳는다.
             logger.info("[webui] " + fmt, *args)
 
         # -- 응답 헬퍼 ----------------------------------------------------
@@ -376,6 +414,9 @@ def _make_handler(context: WebUIContext):
         # -- 라우팅 ---------------------------------------------------------
 
         def do_GET(self):  # noqa: N802
+            if self.path == "/api/log":
+                self._send_json(200, {"lines": _tail_log_lines(context.log_path)})
+                return
             if self.path not in ("/", ""):
                 self.send_response(404)
                 self.end_headers()

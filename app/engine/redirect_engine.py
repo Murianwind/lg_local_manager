@@ -49,11 +49,13 @@ class RedirectWorker:
         self._handle = None
 
     def _filter(self) -> str:
-        # 이 기기가 보내는 443/8883번 목적지 패킷만 가로챈다.
+        # ARP 스푸핑으로 이 기기가 보낸 패킷은 "이 PC로 들어오는"(inbound) 방향으로
+        # 도착한다. outbound로 잡으면 이 PC가 직접 내보내는 패킷만 걸려서, 정작
+        # 리다이렉트하려는 기기의 트래픽 자체를 못 잡는다.
         return (
             f"ip.SrcAddr == {self.device_ip} and tcp and "
             f"(tcp.DstPort == {LG_HTTPS_PORT} or tcp.DstPort == {LG_MQTTS_PORT}) "
-            "and outbound"
+            "and inbound"
         )
 
     def start(self) -> None:

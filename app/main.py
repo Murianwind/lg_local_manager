@@ -13,6 +13,7 @@ python -m app.main 으로 실행하거나, 빌드된 exe(LGLocalManager.exe)를 
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 import threading
 import time
@@ -182,8 +183,22 @@ def main() -> None:
         orchestrator.stop()
         icon_.stop()
 
+    def restart_app(icon_, _menu_item=None):
+        logger.info("사용자 요청으로 재시작합니다.")
+        # sys.argv[0]은 frozen exe에서도, 개발 모드(python -m app.main)에서도
+        # 실행 파일 자체를 가리키므로 빼고, 나머지 인자만 sys.executable에 붙여
+        # 같은 방식으로 재실행한다.
+        subprocess.Popen(
+            [sys.executable, *sys.argv[1:]],
+            creationflags=subprocess.CREATE_NO_WINDOW
+            if hasattr(subprocess, "CREATE_NO_WINDOW")
+            else 0,
+        )
+        quit_app(icon_)
+
     menu = pystray.Menu(
         pystray.MenuItem("대시보드 열기", open_dashboard, default=True),
+        pystray.MenuItem("재시작", restart_app),
         pystray.MenuItem("종료", quit_app),
     )
 
