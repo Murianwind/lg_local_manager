@@ -38,6 +38,7 @@ jobs:
         run: |
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             # [수동 실행] 타임스탬프 태그 생성 / 버전 업데이트 안 함 / 프리 릴리스
+            $kst = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Date), "Korea Standard Time")
             $tag = "v" + (Get-Date -Format "yyyyMMdd-HHmmss")
             echo "TAG_NAME=$tag" >> $env:GITHUB_ENV
             echo "SHOULD_UPDATE_VERSION=false" >> $env:GITHUB_ENV
