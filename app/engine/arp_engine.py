@@ -134,9 +134,30 @@ class ArpSpoofWorker:
         if not self._initialize():
             return
 
+        logger.info(
+            "ARP 스푸핑 초기화 완료 (%s): 내 MAC=%s, 게이트웨이 MAC=%s — 매 %.0f초 전송",
+            self.target.name,
+            self._my_mac,
+            self._gateway_mac,
+            self.interval_sec,
+        )
+
+        cycle_count = 0
+        # 실패할 때만 경고가 뜨는 구조라, 조용하면 "잘 되고 있는 건지 아무것도
+        # 안 하고 있는 건지" 구분이 안 됐다. 매 사이클마다 로그를 남기면
+        # 너무 시끄러우니, 대략 1분에 한 번씩만 "살아있다"는 걸 남긴다.
+        confirm_every = max(1, round(60 / self.interval_sec))
+
         while not self._stop_event.is_set():
             try:
                 self._spoof_once()
+                cycle_count += 1
+                if cycle_count % confirm_every == 0:
+                    logger.info(
+                        "ARP 스푸핑 정상 동작 중 (%s): 지금까지 %d회 전송",
+                        self.target.name,
+                        cycle_count,
+                    )
             except Exception as e:  # noqa: BLE001
                 logger.warning("ARP 패킷 전송 실패 (%s): %s", self.target.name, e)
             self._stop_event.wait(self.interval_sec)
