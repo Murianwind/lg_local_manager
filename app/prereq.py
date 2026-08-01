@@ -34,16 +34,38 @@ def relaunch_as_admin() -> None:
 
 
 def npcap_installed() -> bool:
-    """레지스트리로 Npcap 설치 여부를 간단히 확인한다."""
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Npcap"
-        ):
-            return True
-    except FileNotFoundError:
-        return False
-    except Exception:  # noqa: BLE001
-        return False
+    """
+    Npcap 설치 여부를 확인한다.
+
+    레지스트리 키 하나만 보면 오탐이 난다 — Npcap 설치 프로그램이 32비트로
+    동작하면 Windows가 HKLM\\SOFTWARE\\Npcap 대신 HKLM\\SOFTWARE\\WOW6432Node\\Npcap
+    으로 자동 리다이렉트해서 쓰는데, 이 둘은 서로 자동으로 연결되지 않는다.
+    그래서 두 레지스트리 뷰를 모두 보고, 그것도 실패하면 실제 드라이버 파일
+    존재 여부로 최종 확인한다.
+    """
+    import winreg
+
+    registry_paths = (r"SOFTWARE\Npcap", r"SOFTWARE\WOW6432Node\Npcap")
+    access_flags = (
+        winreg.KEY_READ,
+        winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+        winreg.KEY_READ | winreg.KEY_WOW64_32KEY,
+    )
+    for path in registry_paths:
+        for flags in access_flags:
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path, 0, flags):
+                    return True
+            except OSError:
+                continue
+
+    # 레지스트리로 못 찾으면 실제 드라이버/DLL 파일 존재로 최종 확인한다.
+    file_candidates = (
+        Path(r"C:\Windows\System32\Npcap\wpcap.dll"),
+        Path(r"C:\Windows\System32\Npcap\Packet.dll"),
+        Path(r"C:\Windows\System32\drivers\npcap.sys"),
+    )
+    return any(p.exists() for p in file_candidates)
 
 
 def windivert_files_present(app_dir: Path) -> bool:
