@@ -53,6 +53,10 @@ FULL_ASSET_PATTERN = re.compile(r"full", re.IGNORECASE)
 # Full 설치 시 보존할(교체하지 않을) 최상위 경로.
 PRESERVE_PATHS = ("config", "data")
 
+# 교체 스크립트(PowerShell, 완전히 분리된 프로세스라 우리 로거로 못 남김)가
+# 자기 진행 상황을 남기는 파일 이름. data/ 밑에 두면 exe 교체와 무관하게 남는다.
+UPDATE_APPLY_LOG_FILENAME = "update-apply.log"
+
 UpdateChannel = Literal["stable", "beta"]
 
 
@@ -204,55 +208,113 @@ def _download(url: str, dest: Path, timeout: float = 120.0) -> None:
 
 
 _LIGHT_SWAP_SCRIPT = r'''
-$ErrorActionPreference = "Stop"
-$pid_to_wait = {pid}
-$newExe = "{new_exe}"
-$targetExe = "{target_exe}"
-$tmpDir = "{tmp_dir}"
-
-$count = 0
-while ((Get-Process -Id $pid_to_wait -ErrorAction SilentlyContinue) -and ($count -lt 60)) {{
-    Start-Sleep -Milliseconds 500
-    $count++
+$logFile = "{log_file}"
+function Log($msg) {{
+    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg" | Out-File -FilePath $logFile -Append -Encoding utf8
 }}
 
-Copy-Item -Force $newExe $targetExe
-Start-Process -FilePath $targetExe
+try {{
+    $pid_to_wait = {pid}
+    $newExe = "{new_exe}"
+    $targetExe = "{target_exe}"
+    $tmpDir = "{tmp_dir}"
 
-Start-Sleep -Seconds 2
-Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    Log "update start (light): pid=$pid_to_wait -> $targetExe"
+
+    $count = 0
+    while ((Get-Process -Id $pid_to_wait -ErrorAction SilentlyContinue) -and ($count -lt 60)) {{
+        Start-Sleep -Milliseconds 500
+        $count++
+    }}
+    Log "old process exited (waited $count x 0.5s)"
+
+    # 프로세스가 막 종료된 직후엔 OS/백신이 exe 파일을 잠깐 더 붙잡고 있을 수
+    # 있어서, 한 번 실패해도 바로 포기하지 않고 몇 초간 재시도한다.
+    $copied = $false
+    for ($i = 0; $i -lt 10; $i++) {{
+        try {{
+            Copy-Item -Force $newExe $targetExe
+            $copied = $true
+            break
+        }} catch {{
+            Log "copy attempt $i failed: $_"
+            Start-Sleep -Seconds 1
+        }}
+    }}
+    if (-not $copied) {{
+        Log "ERROR: could not replace exe after retries, giving up"
+        exit 1
+    }}
+    Log "exe replaced"
+
+    Start-Process -FilePath $targetExe
+    Log "relaunched: $targetExe"
+
+    Start-Sleep -Seconds 2
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    Log "update done (light)"
+}} catch {{
+    Log "FATAL: $_"
+}}
 '''
 
 _FULL_SWAP_SCRIPT = r'''
-$ErrorActionPreference = "Stop"
-$pid_to_wait = {pid}
-$sourceDir = "{source_dir}"
-$targetDir = "{target_dir}"
-$tmpDir = "{tmp_dir}"
-$exeName = "LGLocalManager.exe"
-$preserve = @({preserve_list})
-
-$count = 0
-while ((Get-Process -Id $pid_to_wait -ErrorAction SilentlyContinue) -and ($count -lt 60)) {{
-    Start-Sleep -Milliseconds 500
-    $count++
+$logFile = "{log_file}"
+function Log($msg) {{
+    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg" | Out-File -FilePath $logFile -Append -Encoding utf8
 }}
 
-Get-ChildItem -Path $sourceDir -Force | ForEach-Object {{
-    if ($preserve -contains $_.Name) {{
-        return
+try {{
+    $pid_to_wait = {pid}
+    $sourceDir = "{source_dir}"
+    $targetDir = "{target_dir}"
+    $tmpDir = "{tmp_dir}"
+    $exeName = "LGLocalManager.exe"
+    $preserve = @({preserve_list})
+
+    Log "update start (full): pid=$pid_to_wait -> $targetDir"
+
+    $count = 0
+    while ((Get-Process -Id $pid_to_wait -ErrorAction SilentlyContinue) -and ($count -lt 60)) {{
+        Start-Sleep -Milliseconds 500
+        $count++
     }}
-    $destPath = Join-Path $targetDir $_.Name
-    if (Test-Path $destPath) {{
-        Remove-Item -Recurse -Force $destPath
+    Log "old process exited (waited $count x 0.5s)"
+
+    Get-ChildItem -Path $sourceDir -Force | ForEach-Object {{
+        if ($preserve -contains $_.Name) {{
+            return
+        }}
+        $destPath = Join-Path $targetDir $_.Name
+        $copied = $false
+        for ($i = 0; $i -lt 10; $i++) {{
+            try {{
+                if (Test-Path $destPath) {{
+                    Remove-Item -Recurse -Force $destPath
+                }}
+                Copy-Item -Recurse -Force $_.FullName $destPath
+                $copied = $true
+                break
+            }} catch {{
+                Log "copy attempt $i failed for $($_.Name): $_"
+                Start-Sleep -Seconds 1
+            }}
+        }}
+        if (-not $copied) {{
+            Log "ERROR: could not replace $($_.Name) after retries"
+        }}
     }}
-    Copy-Item -Recurse -Force $_.FullName $destPath
+    Log "files replaced"
+
+    Start-Process -FilePath (Join-Path $targetDir $exeName)
+    Log "relaunched: $(Join-Path $targetDir $exeName)"
+
+    Start-Sleep -Seconds 2
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    Log "update done (full)"
+}} catch {{
+    Log "FATAL: $_"
 }}
-
-Start-Process -FilePath (Join-Path $targetDir $exeName)
-
-Start-Sleep -Seconds 2
-Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 '''
 
 
@@ -311,12 +373,15 @@ def _apply_light_update(info: UpdateInfo, app_dir: Path) -> None:
     logger.info("Update(exe만) 다운로드: %s", info.update_zip_url)
     tmp_dir, extract_dir = _download_and_extract(info.update_zip_url)
     exe_dir = _find_exe_dir(extract_dir)
+    log_file = app_dir / "data" / UPDATE_APPLY_LOG_FILENAME
+    logger.info("교체 스크립트 로그 위치: %s", log_file)
 
     script = _LIGHT_SWAP_SCRIPT.format(
         pid=os.getpid(),
         new_exe=str(exe_dir / "LGLocalManager.exe"),
         target_exe=str(app_dir / "LGLocalManager.exe"),
         tmp_dir=str(tmp_dir),
+        log_file=str(log_file),
     )
     _launch_script(script)
 
@@ -328,6 +393,8 @@ def _apply_full_update(info: UpdateInfo, app_dir: Path) -> None:
     logger.info("Full(전체) 다운로드: %s", info.full_zip_url)
     tmp_dir, extract_dir = _download_and_extract(info.full_zip_url)
     source_dir = _find_exe_dir(extract_dir)
+    log_file = app_dir / "data" / UPDATE_APPLY_LOG_FILENAME
+    logger.info("교체 스크립트 로그 위치: %s", log_file)
 
     preserve_list = ", ".join(f'"{p}"' for p in PRESERVE_PATHS)
     script = _FULL_SWAP_SCRIPT.format(
@@ -336,6 +403,7 @@ def _apply_full_update(info: UpdateInfo, app_dir: Path) -> None:
         target_dir=str(app_dir),
         tmp_dir=str(tmp_dir),
         preserve_list=preserve_list,
+        log_file=str(log_file),
     )
     _launch_script(script)
 
