@@ -16,6 +16,16 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # 러너는 기본적으로 UTC로 동작한다. 태그 이름만 한국시간으로 계산해봐야
+      # zip 안에 실제로 들어가는 개별 파일들의 "수정한 날짜"는 여전히 UTC로
+      # 찍힌다 — Copy-Item/Compress-Archive 등이 그 순간의 시스템 시계를
+      # 그대로 쓰기 때문이다. 아예 러너의 시스템 시간대를 통째로 KST로
+      # 바꿔서, 이후의 Get-Date와 모든 파일 타임스탬프가 자동으로 한국시간이
+      # 되게 한다.
+      - name: Set runner timezone to KST
+        shell: pwsh
+        run: Set-TimeZone -Id "Korea Standard Time"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
