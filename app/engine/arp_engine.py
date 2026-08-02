@@ -224,8 +224,17 @@ class ArpSpoofWorker:
             # 될 수 있다. 우리가 실제로 관심 있는 건 "대상 기기"와
             # "게이트웨이"가 연루된 ARP뿐이니, BPF 필터 단계에서 미리 좁혀서
             # 무관한 트래픽은 커널/드라이버 레벨에서 걸러지게 한다.
+            #
+            # "host 게이트웨이"만으로는 부족하다 — 이 PC 자신도 같은
+            # 게이트웨이로 인터넷을 쓰기 때문에, 이 PC 자신의 평범한 ARP
+            # 트래픽까지 걸려서 실제로는 전부 잡음이었다(로그로 확인됨:
+            # 목격된 패킷이 전부 이 PC IP와 게이트웨이 사이였고, 제습기는
+            # 한 번도 등장한 적이 없었다). 이 PC 자신의 IP를 명시적으로
+            # 제외한다.
+            iface_ip = get_if_addr(conf.iface)
             arp_filter = (
-                f"arp and (host {self.target.ip} or host {self.gateway_ip})"
+                f"arp and (host {self.target.ip} or host {self.gateway_ip}) "
+                f"and not host {iface_ip}"
             )
             self._sniffer = AsyncSniffer(
                 iface=conf.iface, filter=arp_filter, prn=self._on_arp_packet, store=False
