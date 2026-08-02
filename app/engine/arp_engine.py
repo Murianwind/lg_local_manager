@@ -16,6 +16,7 @@ devices.json에 등록되지 않은 기기는 절대 대상이 되지 않는다.
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -28,6 +29,42 @@ logger = logging.getLogger("arp_engine")
 # 막아서, 어떤 경로로 루프가 생기든 네트워크를 ARP로 가득 채우는 사고
 # (실제로 한 번 발생해 인터넷이 끊겼음)가 재발하지 않게 한다.
 _MIN_REACTIVE_SEND_INTERVAL_SEC = 0.3
+
+
+def enable_ip_forwarding() -> bool:
+    """Windows IPv4 포워딩을 활성화한다.
+
+    ARP 스푸핑으로 기기의 트래픽을 이 PC로 끌어오면, 443/8883 외의 나머지
+    트래픽(WinDivert가 안 건드리는 것들)은 실제 게이트웨이로 다시 전달해줘야
+    한다. 이걸 안 해두면 그 트래픽들이 이 PC에서 블랙홀에 빠지고, 그로 인한
+    재시도/타임아웃 누적이 "활성화하면 서서히 느려진다"는 증상의 원인일 수
+    있다는 지적을 받았다 — 원래 설계 의도(모듈 docstring 참고)에는 있었지만
+    실제 구현이 빠져 있던 부분이라 여기서 채운다.
+
+    재부팅이 필요한 레지스트리 방식(IPEnableRouter) 대신, 재부팅 없이 즉시
+    적용되는 PowerShell 명령으로 모든 IPv4 인터페이스에 포워딩을 켠다.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-Command",
+                "Get-NetIPInterface -AddressFamily IPv4 | Set-NetIPInterface -Forwarding Enabled",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            logger.info("IP 포워딩 활성화 완료 (모든 IPv4 인터페이스)")
+            return True
+        logger.warning(
+            "IP 포워딩 활성화 실패 (exit=%s): %s", result.returncode, result.stderr.strip()
+        )
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.warning("IP 포워딩 활성화 중 오류: %s", e)
+        return False
 
 try:
     import scapy  # type: ignore
@@ -408,12 +445,16 @@ class ArpEngine:
             if mac not in wanted:
                 self._workers.pop(mac).stop(restore=True)
 
-        # 새로 enabled 된 기기 -> 시작
-        for mac, target in wanted.items():
-            if mac not in self._workers:
-                worker = ArpSpoofWorker(target, self.gateway_ip, on_error=self.on_error)
-                self._workers[mac] = worker
-                worker.start()
+        # 새로 enabled 된 기기 -> 시작. 하나라도 새로 켜지기 직전에, IP
+        # 포워딩이 켜져 있는지 한 번은 보장해둔다 (이미 켜져 있으면 그냥
+        # 아무 효과 없이 넘어감 — 매번 다시 켜도 안전하다).
+        new_targets = {mac: t for mac, t in wanted.items() if mac not in self._workers}
+        if new_targets:
+            enable_ip_forwarding()
+        for mac, target in new_targets.items():
+            worker = ArpSpoofWorker(target, self.gateway_ip, on_error=self.on_error)
+            self._workers[mac] = worker
+            worker.start()
 
     def stop_all(self) -> None:
         for worker in self._workers.values():
