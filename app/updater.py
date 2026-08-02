@@ -228,6 +228,8 @@ try {{
     $pid_to_wait = {pid}
     $newExe = "{new_exe}"
     $targetExe = "{target_exe}"
+    $newInternal = "{new_internal}"
+    $targetInternal = "{target_internal}"
     $tmpDir = "{tmp_dir}"
 
     Log "update start (light): pid=$pid_to_wait -> $targetExe"
@@ -238,6 +240,35 @@ try {{
         $count++
     }}
     Log "old process exited (waited $count x 0.5s)"
+
+    # onedir 빌드라 exe 하나만으로는 안 돌아간다 — Python/의존 라이브러리
+    # DLL들이 담긴 _internal 폴더도 같이 바꿔야 한다. 이것도 exe와 마찬가지로
+    # .new 임시 이름에 전부 받아둔 뒤 한 번에 이름을 바꿔치기(원자적 교체)한다.
+    $stagingInternal = "$targetInternal.new"
+    $oldInternal = "$targetInternal.old"
+    Remove-Item -Recurse -Force $stagingInternal -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $oldInternal -ErrorAction SilentlyContinue
+
+    $internalCopied = $false
+    for ($i = 0; $i -lt 10; $i++) {{
+        try {{
+            Copy-Item -Recurse -Force $newInternal $stagingInternal
+            $internalCopied = $true
+            break
+        }} catch {{
+            Log "_internal copy attempt $i failed: $_"
+            Remove-Item -Recurse -Force $stagingInternal -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+        }}
+    }}
+    if (-not $internalCopied) {{
+        Log "ERROR: could not replace _internal after retries, giving up"
+        exit 1
+    }}
+    Rename-Item -Path $targetInternal -NewName (Split-Path $oldInternal -Leaf)
+    Rename-Item -Path $stagingInternal -NewName (Split-Path $targetInternal -Leaf)
+    Remove-Item -Recurse -Force $oldInternal -ErrorAction SilentlyContinue
+    Log "_internal replaced"
 
     # 프로세스가 막 종료된 직후엔 OS/백신이 exe 파일을 잠깐 더 붙잡고 있을 수
     # 있어서, 한 번 실패해도 바로 포기하지 않고 몇 초간 재시도한다.
@@ -331,6 +362,10 @@ try {{
     }}
     Log "files replaced"
 
+    # (light 스크립트와 동일한 이유) 실시간 백신 검사와의 타이밍 충돌을 피하기
+    # 위해 실행 전 잠깐 대기한다.
+    Start-Sleep -Seconds 2
+
     Start-Process -FilePath (Join-Path $targetDir $exeName) -ArgumentList "--from-auto-update"
     Log "relaunched: $(Join-Path $targetDir $exeName) --from-auto-update"
 
@@ -415,7 +450,7 @@ def _apply_light_update(info: UpdateInfo, app_dir: Path) -> None:
     if info.update_zip_url is None:
         raise ValueError("Update zip URL이 없는 UpdateInfo로 light update를 시도했습니다.")
 
-    logger.info("Update(exe만) 다운로드: %s", info.update_zip_url)
+    logger.info("Update(exe + _internal) 다운로드: %s", info.update_zip_url)
     tmp_dir, extract_dir = _download_and_extract(info.update_zip_url)
     exe_dir = _find_exe_dir(extract_dir)
     log_file = app_dir / "data" / UPDATE_APPLY_LOG_FILENAME
@@ -425,6 +460,8 @@ def _apply_light_update(info: UpdateInfo, app_dir: Path) -> None:
         pid=os.getpid(),
         new_exe=str(exe_dir / "LGLocalManager.exe"),
         target_exe=str(app_dir / "LGLocalManager.exe"),
+        new_internal=str(exe_dir / "_internal"),
+        target_internal=str(app_dir / "_internal"),
         tmp_dir=str(tmp_dir),
         log_file=str(log_file),
     )
