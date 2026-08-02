@@ -195,14 +195,13 @@ class ArpSpoofWorker:
                     )
                 return
 
-            # op == 2 (is-at) 는 더 이상 반응하지 않는다. 원래 이 부분은 공유기의
-            # "ARP Virus 방어" 기능이 광고를 자주(60ms 간격까지) 반복하며 우리
-            # 스푸핑을 되돌리는 것과 맞서기 위해 넣은 반응형 재광고였다. 그
-            # 방어 기능을 공유기 설정에서 꺼두면(권장 사항) 애초에 이 경쟁 자체가
-            # 없어지므로 더 이상 필요 없고, 오히려 자기 자신의 트래픽을 다시
-            # 감지하는 경로가 하나 늘어나는 것 자체가 위험(실제로 네트워크
-            # 전체가 마비된 사고가 있었음)이라 기능째로 제거한다. 2초 주기
-            # 정기 광고(_spoof_once)만으로 충분하다.
+            # op == 2 (is-at)는 반응하지 않는다. 공유기의 "ARP Virus 방어"
+            # 기능이 자기 자신을 자주 재광고하는 것과 맞서기 위해 넣었다가
+            # (1) 자기 트래픽을 자기가 감지하는 무한루프로 인터넷을 끊어먹은 뒤
+            # (2) 안전장치를 추가하고도 여전히 서서히 느려지는 증상이 있어서
+            # 뺐다. 지금은 "감시 범위를 기기/게이트웨이로 좁힌 것"만 단독으로
+            # 검증하는 단계라, 다른 변수(이 기능)를 다시 섞지 않는다 — 이걸
+            # 다시 넣는 건 이번 테스트 결과를 본 다음에 결정한다.
         except Exception as e:  # noqa: BLE001
             logger.warning("ARP 요청 실시간 응답 실패 (%s): %s", self.target.name, e)
 
@@ -218,14 +217,25 @@ class ArpSpoofWorker:
             # iface를 명시하지 않으면 scapy가 send()와 다른 기본 어댑터를 고를
             # 수 있다 — 어댑터 진단 로그로 확인해둔 것과 반드시 같은 인터페이스를
             # 감시하도록 명시적으로 고정한다.
+            #
+            # filter="arp"만 쓰면 네트워크의 모든 기기(스마트홈 기기 여러 대
+            # 포함)가 주고받는 ARP 트래픽을 전부 붙잡아서 매번 파이썬 콜백을
+            # 돌리게 된다 — 스마트홈 기기가 많은 집에서는 이게 상당한 부하가
+            # 될 수 있다. 우리가 실제로 관심 있는 건 "대상 기기"와
+            # "게이트웨이"가 연루된 ARP뿐이니, BPF 필터 단계에서 미리 좁혀서
+            # 무관한 트래픽은 커널/드라이버 레벨에서 걸러지게 한다.
+            arp_filter = (
+                f"arp and (host {self.target.ip} or host {self.gateway_ip})"
+            )
             self._sniffer = AsyncSniffer(
-                iface=conf.iface, filter="arp", prn=self._on_arp_packet, store=False
+                iface=conf.iface, filter=arp_filter, prn=self._on_arp_packet, store=False
             )
             self._sniffer.start()
             logger.info(
-                "ARP 요청 실시간 감시 시작: %s (인터페이스: %s)",
+                "ARP 요청 실시간 감시 시작: %s (인터페이스: %s, 필터: %s)",
                 self.target.name,
                 conf.iface,
+                arp_filter,
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("ARP 요청 실시간 감시 시작 실패 (%s): %s", self.target.name, e)
